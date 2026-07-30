@@ -3,10 +3,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::slash::SlashCommand;
 use crate::provider::Role;
 
 pub struct VisibleMessage<'a> {
@@ -27,6 +28,8 @@ pub struct ChatView<'a> {
     pub streaming_text: &'a str,
     pub reasoning_text: &'a str,
     pub input: &'a str,
+    pub slash_suggestions: &'a [SlashCommand],
+    pub selected_suggestion: usize,
 }
 
 pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
@@ -63,46 +66,26 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
 
     let mut lines = Vec::new();
     for message in view.messages {
-        let (name, color) = match message.role {
-            Role::User => ("你", Color::Cyan),
-            Role::Assistant => ("小鞠", Color::Magenta),
-            Role::System => ("系统", Color::DarkGray),
-        };
-        let interrupted = if message.interrupted {
-            "（已中断）"
-        } else {
-            ""
-        };
-        lines.push(Line::from(Span::styled(
-            format!("{name}{interrupted}"),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
-        lines.extend(message.content.lines().map(Line::from));
-        lines.push(Line::default());
+        push_bubble(
+            &mut lines,
+            message.role,
+            message.content,
+            message.interrupted,
+        );
     }
     if !view.reasoning_text.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "思考",
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.extend(
-            view.reasoning_text
-                .lines()
-                .map(|line| Line::styled(line, Style::default().fg(Color::DarkGray))),
-        );
-        lines.push(Line::default());
+        push_bubble(&mut lines, &Role::System, view.reasoning_text, false);
     }
     if !view.streaming_text.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "小鞠",
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.extend(view.streaming_text.lines().map(Line::from));
+        push_bubble(&mut lines, &Role::Assistant, view.streaming_text, false);
     }
     if lines.is_empty() {
-        lines.push(Line::from("……晚上好。想说什么都可以，不必组织得很完整。"));
+        push_bubble(
+            &mut lines,
+            &Role::Assistant,
+            "……晚上好。想说什么都可以，不必组织得很完整。",
+            false,
+        );
     }
     let visible_height = chunks[1].height.saturating_sub(2) as usize;
     let scroll = lines.len().saturating_sub(visible_height) as u16;
@@ -122,6 +105,7 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
     frame.render_widget(input, chunks[2]);
 
     let footer_text = view.error.map_or_else(
+
         || {
             format!(
                 "Enter 发送  Esc 取消  Ctrl+N 新会话  Ctrl+P 切换 Provider  /help 命令  Ctrl+C 退出  tokens {}→{}",
@@ -139,9 +123,99 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
         chunks[3],
     );
 
+    render_slash_suggestions(
+        frame,
+        chunks[2],
+        view.slash_suggestions,
+        view.selected_suggestion,
+    );
+
     if !view.generating {
         frame.set_cursor_position((input_viewport.cursor_x, input_viewport.cursor_y));
     }
+}
+
+fn push_bubble(lines: &mut Vec<Line<'static>>, role: &Role, content: &str, interrupted: bool) {
+    let (name, color, background) = match role {
+        Role::User => ("你", Color::Cyan, Color::Rgb(8, 26, 34)),
+        Role::Assistant => ("小鞠", Color::Magenta, Color::Rgb(30, 14, 38)),
+        Role::System => ("系统", Color::Yellow, Color::Rgb(38, 32, 6)),
+    };
+    let interrupted = if interrupted { "（已中断）" } else { "" };
+    let border_style = Style::default()
+        .fg(color)
+        .bg(background)
+        .add_modifier(Modifier::BOLD);
+    lines.push(Line::from(Span::styled(
+        format!("╭─ > {name}{interrupted} "),
+        border_style,
+    )));
+    for content_line in content.lines() {
+        lines.push(Line::from(vec![
+            Span::styled("│ ", border_style),
+            Span::styled(
+                format!("{content_line} "),
+                Style::default().fg(Color::White).bg(background),
+            ),
+        ]));
+    }
+    lines.push(Line::from(Span::styled("╰─", border_style)));
+    lines.push(Line::default());
+}
+
+fn render_slash_suggestions(
+    frame: &mut Frame<'_>,
+    input_area: Rect,
+    suggestions: &[SlashCommand],
+    selected: usize,
+) {
+    if suggestions.is_empty() || input_area.width < 12 {
+        return;
+    }
+    const MAX_VISIBLE: usize = 6;
+    let selected = selected.min(suggestions.len() - 1);
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(MAX_VISIBLE)
+        .min(suggestions.len().saturating_sub(MAX_VISIBLE));
+    let visible = &suggestions[start..suggestions.len().min(start + MAX_VISIBLE)];
+    let height = visible.len() as u16 + 2;
+    let area = Rect::new(
+        input_area.x,
+        input_area.y.saturating_sub(height),
+        input_area.width,
+        height,
+    );
+    let lines = visible
+        .iter()
+        .enumerate()
+        .map(|(offset, command)| {
+            let is_selected = start + offset == selected;
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+            Line::from(vec![
+                Span::styled(format!(" {:<25}", command.usage), style),
+                Span::styled(command.description, style),
+            ])
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(" 命令补全 · Tab 确认 · ↑↓选择 ")
+                .title_style(Style::default().fg(Color::Yellow))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        area,
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,5 +272,22 @@ mod tests {
         let vertical = input_viewport("一\n二\n三\n四", AREA);
         assert_eq!(vertical.vertical_scroll, 1);
         assert_eq!(vertical.cursor_y, 8);
+    }
+
+    #[test]
+    fn bubbles_use_prefixed_role_colors() {
+        let mut system = Vec::new();
+        push_bubble(&mut system, &Role::System, "已切换。", false);
+        assert_eq!(system[0].to_string(), "╭─ > 系统 ");
+        assert_eq!(system[0].spans[0].style.fg, Some(Color::Yellow));
+
+        let mut assistant = Vec::new();
+        push_bubble(&mut assistant, &Role::Assistant, "晚上好。", false);
+        assert_eq!(assistant[0].to_string(), "╭─ > 小鞠 ");
+        assert_eq!(assistant[0].spans[0].style.fg, Some(Color::Magenta));
+
+        let mut user = Vec::new();
+        push_bubble(&mut user, &Role::User, "你好。", false);
+        assert_eq!(user[0].to_string(), "╭─ > 你 ");
     }
 }

@@ -19,7 +19,10 @@ use crate::{
     config::AppConfig,
     memory::{SessionSummary, Store, StoredMessage},
     provider::{ChatStream, Role, StreamEvent, TokenUsage, factory},
-    tui::chat::{self, ChatView, VisibleMessage},
+    tui::{
+        chat::{self, ChatView, VisibleMessage},
+        slash,
+    },
 };
 
 pub async fn run(
@@ -77,6 +80,7 @@ struct ChatApp {
     session: SessionSummary,
     messages: Vec<StoredMessage>,
     input: String,
+    completion_index: usize,
     stream: Option<ChatStream>,
     cancellation: Option<Arc<AtomicBool>>,
     streaming_text: String,
@@ -106,6 +110,7 @@ impl ChatApp {
             session,
             messages,
             input: String::new(),
+            completion_index: 0,
             stream: None,
             cancellation: None,
             streaming_text: String::new(),
@@ -162,6 +167,12 @@ impl ChatApp {
                 interrupted: message.interrupted,
             })
             .collect::<Vec<_>>();
+        let suggestions = slash::suggestions(&self.input);
+        let selected_suggestion = if suggestions.is_empty() {
+            0
+        } else {
+            self.completion_index % suggestions.len()
+        };
         terminal.draw(|frame| {
             chat::render(
                 frame,
@@ -177,6 +188,8 @@ impl ChatApp {
                     streaming_text: &self.streaming_text,
                     reasoning_text: &self.reasoning_text,
                     input: &self.input,
+                    slash_suggestions: &suggestions,
+                    selected_suggestion,
                 },
             );
         })?;
@@ -209,6 +222,7 @@ impl ChatApp {
                 KeyCode::Char('p') => {
                     if self.stream.is_none() {
                         self.input = "/provider ".into();
+                        self.completion_index = 0;
                     }
                     Ok(true)
                 }
@@ -222,6 +236,10 @@ impl ChatApp {
             };
         }
 
+        if self.stream.is_none() && self.handle_completion_key(key.code) {
+            return Ok(true);
+        }
+
         match key.code {
             KeyCode::Esc if self.stream.is_some() => self.cancel_generation()?,
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -232,11 +250,46 @@ impl ChatApp {
             KeyCode::Enter => self.send().await?,
             KeyCode::Backspace if self.stream.is_none() => {
                 self.input.pop();
+                self.completion_index = 0;
             }
-            KeyCode::Char(character) if self.stream.is_none() => self.input.push(character),
+            KeyCode::Char(character) if self.stream.is_none() => {
+                self.input.push(character);
+                self.completion_index = 0;
+            }
             _ => {}
         }
         Ok(true)
+    }
+
+    fn handle_completion_key(&mut self, key: KeyCode) -> bool {
+        let suggestions = slash::suggestions(&self.input);
+        if suggestions.is_empty() {
+            return false;
+        }
+        match key {
+            KeyCode::Up => {
+                self.completion_index = self
+                    .completion_index
+                    .checked_sub(1)
+                    .unwrap_or(suggestions.len() - 1);
+                true
+            }
+            KeyCode::Down => {
+                self.completion_index = (self.completion_index + 1) % suggestions.len();
+                true
+            }
+            KeyCode::Tab => {
+                let command = suggestions[self.completion_index % suggestions.len()];
+                self.input.clear();
+                self.input.push_str(command.name);
+                if command.takes_argument {
+                    self.input.push(' ');
+                }
+                self.completion_index = 0;
+                true
+            }
+            _ => false,
+        }
     }
 
     async fn send(&mut self) -> Result<()> {
@@ -279,9 +332,7 @@ impl ChatApp {
         let mut arguments = command.split_whitespace();
         let name = arguments.next().unwrap_or_default();
         match name {
-            "/help" => self.add_system_message(
-                "/status  当前状态\n/providers  可用 Provider\n/provider <名称>  切换 Provider\n/models  当前 Provider 的模型\n/model <ID>  切换模型\n/new  新建会话\n/reasoning on|off  显示或隐藏推理内容",
-            ),
+            "/help" => self.add_system_message(slash::help_text()),
             "/status" => self.add_system_message(format!(
                 "Provider：{}  模型：{}  推理显示：{}",
                 self.agent.provider_id(),
@@ -289,7 +340,10 @@ impl ChatApp {
                 if self.show_reasoning { "开" } else { "关" }
             )),
             "/providers" => {
-                self.add_system_message(format!("可用 Provider：{}", factory::PROVIDER_IDS.join(", ")));
+                self.add_system_message(format!(
+                    "可用 Provider：{}",
+                    factory::PROVIDER_IDS.join(", ")
+                ));
             }
             "/provider" => {
                 if let Some(provider_id) = arguments.next() {
@@ -472,7 +526,7 @@ mod tests {
     use crate::provider::mock::MockProvider;
 
     #[tokio::test]
-    async fn slash_model_command_persists_without_entering_chat_history() {
+    async fn slash_completion_and_model_selection_are_persistent() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
         let mut config = AppConfig::default();
@@ -481,6 +535,12 @@ mod tests {
         let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
         let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
         let mut app = ChatApp::new(agent, store, config, config_path.clone(), None).unwrap();
+
+        app.input = "/pro".into();
+        assert!(app.handle_completion_key(KeyCode::Down));
+        assert!(app.handle_completion_key(KeyCode::Tab));
+        assert_eq!(app.input, "/provider ");
+        app.input.clear();
 
         app.execute_slash_command("/model komari-mock")
             .await
