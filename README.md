@@ -94,13 +94,14 @@ komari-call --help                               # 查看全部命令
 ```text
 /help                     显示命令帮助
 /status                   显示当前 Provider 和模型
-/models                   查询当前 Provider 的模型
-/model <模型 ID>           切换并保存模型
-/new                      新建会话
+/models                   打开模型选择器
+/model                    打开模型选择器
+/clear                    清空上下文并开始新对话
+/new                      开始新对话（等同 /clear）
 /reasoning on|off         显示或隐藏推理内容
 ```
 
-输入 `/` 会显示候选；用 `↑`、`↓` 选择，`Tab` 补全。
+输入 `/` 会自动显示命令候选；继续输入 `/c` 会收窄到 `/clear`。用 `↑`、`↓` 选择，`Tab` 补全。模型选择器同样使用 `↑`、`↓` 移动，`Enter` 确认，`Esc` 关闭。
 
 ## 键位
 
@@ -109,8 +110,10 @@ komari-call --help                               # 查看全部命令
 - `Esc`：取消当前生成
 - `Ctrl+N`：新建会话
 - `Ctrl+L`：切换会话
-- `Ctrl+P`：输入 Provider 切换命令
+- `Ctrl+P`：打开模型选择器
 - `Ctrl+C`：保存并退出
+
+`/clear`、`/new` 和 `Ctrl+N` 都会创建独立的新会话；发送给模型的上下文只来自这个新会话，不会混入之前会话的消息。
 
 ## 本地数据与隐私
 

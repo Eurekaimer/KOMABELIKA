@@ -16,6 +16,12 @@ pub struct VisibleMessage<'a> {
     pub interrupted: bool,
 }
 
+pub struct SelectionView<'a> {
+    pub title: &'a str,
+    pub options: &'a [String],
+    pub selected: usize,
+}
+
 pub struct ChatView<'a> {
     pub session_name: &'a str,
     pub provider: &'a str,
@@ -30,6 +36,7 @@ pub struct ChatView<'a> {
     pub input: &'a str,
     pub slash_suggestions: &'a [SlashCommand],
     pub selected_suggestion: usize,
+    pub model_picker: Option<SelectionView<'a>>,
 }
 
 pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
@@ -108,7 +115,7 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
 
         || {
             format!(
-                "Enter 发送  Esc 取消  Ctrl+N 新会话  Ctrl+P 切换 Provider  /help 命令  Ctrl+C 退出  tokens {}→{}",
+                "Enter 发送  Esc 取消  Ctrl+N/clear 新会话  Ctrl+P 选择模型  /help 命令  Ctrl+C 退出  tokens {}→{}",
                 view.input_tokens, view.output_tokens
             )
         },
@@ -129,8 +136,11 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
         view.slash_suggestions,
         view.selected_suggestion,
     );
+    if let Some(picker) = &view.model_picker {
+        render_selection(frame, area, picker);
+    }
 
-    if !view.generating {
+    if !view.generating && view.model_picker.is_none() {
         frame.set_cursor_position((input_viewport.cursor_x, input_viewport.cursor_y));
     }
 }
@@ -213,6 +223,59 @@ fn render_slash_suggestions(
                 .title_style(Style::default().fg(Color::Yellow))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        area,
+    );
+}
+
+fn render_selection(frame: &mut Frame<'_>, outer: Rect, picker: &SelectionView<'_>) {
+    if picker.options.is_empty() || outer.width < 16 || outer.height < 6 {
+        return;
+    }
+    let width = outer.width.saturating_mul(3).saturating_div(4).max(16);
+    let max_rows = outer.height.saturating_sub(4).min(12) as usize;
+    let selected = picker.selected.min(picker.options.len() - 1);
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(max_rows)
+        .min(picker.options.len().saturating_sub(max_rows));
+    let visible = &picker.options[start..picker.options.len().min(start + max_rows)];
+    let height = visible.len() as u16 + 2;
+    let area = Rect::new(
+        outer.x + outer.width.saturating_sub(width) / 2,
+        outer.y + outer.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let lines = visible
+        .iter()
+        .enumerate()
+        .map(|(offset, model)| {
+            let is_selected = start + offset == selected;
+            let marker = if is_selected { "▶ " } else { "  " };
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Magenta)
+            };
+            Line::from(Span::styled(format!("{marker}{model}"), style))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!(" {} ", picker.title))
+                .title_style(
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
         ),
         area,
     );

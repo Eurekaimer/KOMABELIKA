@@ -34,19 +34,25 @@ pub const COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/models",
         usage: "/models",
-        description: "列出当前 Provider 的模型",
+        description: "打开当前 Provider 的模型选择器",
         takes_argument: false,
     },
     SlashCommand {
         name: "/model",
-        usage: "/model <模型 ID>",
-        description: "切换并保存模型",
-        takes_argument: true,
+        usage: "/model",
+        description: "用上下键选择并保存模型",
+        takes_argument: false,
+    },
+    SlashCommand {
+        name: "/clear",
+        usage: "/clear",
+        description: "清空上下文并开始新对话",
+        takes_argument: false,
     },
     SlashCommand {
         name: "/new",
         usage: "/new",
-        description: "新建会话",
+        description: "开始新对话（等同 /clear）",
         takes_argument: false,
     },
     SlashCommand {
@@ -95,6 +101,10 @@ mod tests {
             .map(|command| command.name)
             .collect::<Vec<_>>();
         assert_eq!(names, ["/providers", "/provider"]);
+
+        let clear = suggestions("/c");
+        assert_eq!(clear.len(), 1);
+        assert_eq!(clear[0].name, "/clear");
 
         let provider = suggestions("/provider ");
         assert_eq!(provider.len(), 1);

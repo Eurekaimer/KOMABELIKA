@@ -71,6 +71,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     Ok(())
 }
 
+struct ModelPicker {
+    models: Vec<String>,
+    selected: usize,
+}
+
 struct ChatApp {
     agent: ChatAgent,
     store: Store,
@@ -81,6 +86,7 @@ struct ChatApp {
     messages: Vec<StoredMessage>,
     input: String,
     completion_index: usize,
+    model_picker: Option<ModelPicker>,
     stream: Option<ChatStream>,
     cancellation: Option<Arc<AtomicBool>>,
     streaming_text: String,
@@ -111,6 +117,7 @@ impl ChatApp {
             messages,
             input: String::new(),
             completion_index: 0,
+            model_picker: None,
             stream: None,
             cancellation: None,
             streaming_text: String::new(),
@@ -190,6 +197,14 @@ impl ChatApp {
                     input: &self.input,
                     slash_suggestions: &suggestions,
                     selected_suggestion,
+                    model_picker: self
+                        .model_picker
+                        .as_ref()
+                        .map(|picker| chat::SelectionView {
+                            title: "选择模型 · Enter 确认 · Esc 关闭",
+                            options: &picker.models,
+                            selected: picker.selected,
+                        }),
                 },
             );
         })?;
@@ -197,6 +212,10 @@ impl ChatApp {
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.model_picker.is_some() {
+            return self.handle_model_picker_key(key).await;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('c') => {
@@ -221,8 +240,7 @@ impl ChatApp {
                 }
                 KeyCode::Char('p') => {
                     if self.stream.is_none() {
-                        self.input = "/provider ".into();
-                        self.completion_index = 0;
+                        self.show_model_picker().await;
                     }
                     Ok(true)
                 }
@@ -357,28 +375,18 @@ impl ChatApp {
                     ));
                 }
             }
-            "/models" => {
-                let mut models = self.agent.models().await?;
-                models.sort_by(|left, right| left.id.cmp(&right.id));
-                let list = models
-                    .into_iter()
-                    .map(|model| model.id)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.add_system_message(format!("可用模型：\n{list}"));
-            }
+            "/models" => self.open_model_picker().await?,
             "/model" => {
                 if let Some(model) = arguments.next() {
                     anyhow::ensure!(arguments.next().is_none(), "用法：/model <模型 ID>");
                     self.switch_model(model).await?;
                 } else {
-                    self.add_system_message(format!("当前模型：{}", self.agent.model()));
+                    self.open_model_picker().await?;
                 }
             }
-            "/new" => {
-                anyhow::ensure!(arguments.next().is_none(), "用法：/new");
+            "/new" | "/clear" => {
+                anyhow::ensure!(arguments.next().is_none(), "用法：{name}");
                 self.open_session(self.store.create_session()?)?;
-                self.add_system_message("已新建会话。");
             }
             "/reasoning" => {
                 let enabled = match arguments.next() {
@@ -399,6 +407,65 @@ impl ChatApp {
             _ => anyhow::bail!("未知命令“{name}”；输入 /help 查看可用命令"),
         }
         Ok(())
+    }
+
+    async fn show_model_picker(&mut self) {
+        self.error = None;
+        if let Err(error) = self.open_model_picker().await {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    async fn open_model_picker(&mut self) -> Result<()> {
+        let mut models = self
+            .agent
+            .models()
+            .await?
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        models.sort();
+        models.dedup();
+        anyhow::ensure!(
+            !models.is_empty(),
+            "Provider“{}”当前没有可选模型",
+            self.agent.provider_id()
+        );
+        let selected = models
+            .iter()
+            .position(|model| model == self.agent.model())
+            .unwrap_or(0);
+        self.model_picker = Some(ModelPicker { models, selected });
+        self.input.clear();
+        Ok(())
+    }
+
+    async fn handle_model_picker_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Ok(false);
+        }
+        let Some(picker) = self.model_picker.as_mut() else {
+            return Ok(true);
+        };
+        match key.code {
+            KeyCode::Up => {
+                picker.selected = picker
+                    .selected
+                    .checked_sub(1)
+                    .unwrap_or(picker.models.len() - 1);
+            }
+            KeyCode::Down => picker.selected = (picker.selected + 1) % picker.models.len(),
+            KeyCode::Enter => {
+                let model = picker.models[picker.selected].clone();
+                self.model_picker = None;
+                if let Err(error) = self.switch_model(&model).await {
+                    self.error = Some(error.to_string());
+                }
+            }
+            KeyCode::Esc => self.model_picker = None,
+            _ => {}
+        }
+        Ok(true)
     }
 
     async fn switch_provider(&mut self, provider_id: &str) -> Result<()> {
@@ -503,6 +570,7 @@ impl ChatApp {
         self.input.clear();
         self.streaming_text.clear();
         self.reasoning_text.clear();
+        self.model_picker = None;
         self.error = None;
         Ok(())
     }
@@ -542,14 +610,59 @@ mod tests {
         assert_eq!(app.input, "/provider ");
         app.input.clear();
 
-        app.execute_slash_command("/model komari-mock")
+        app.open_model_picker().await.unwrap();
+        assert_eq!(app.model_picker.as_ref().unwrap().models, ["komari-mock"]);
+        app.model_picker
+            .as_mut()
+            .unwrap()
+            .models
+            .push("another-model".into());
+        app.handle_model_picker_key(KeyEvent::from(KeyCode::Down))
             .await
             .unwrap();
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 1);
+        app.handle_model_picker_key(KeyEvent::from(KeyCode::Up))
+            .await
+            .unwrap();
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 0);
+        app.handle_model_picker_key(KeyEvent::from(KeyCode::Enter))
+            .await
+            .unwrap();
+        assert!(app.model_picker.is_none());
 
         let saved = AppConfig::load(&config_path).unwrap();
         assert_eq!(saved.chat.provider, "mock");
         assert_eq!(saved.chat.model, "komari-mock");
         assert_eq!(app.messages.last().unwrap().role, Role::System);
         assert!(app.store.history(&app.session.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clear_starts_with_no_prior_conversation_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.chat.provider = "mock".into();
+        config.chat.model = "komari-mock".into();
+        let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+        let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
+        let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
+        let previous_session = app.session.id.clone();
+        app.store
+            .save_message(&previous_session, Role::User, "上一段对话", false)
+            .unwrap();
+
+        app.execute_slash_command("/clear").await.unwrap();
+
+        assert_ne!(app.session.id, previous_session);
+        assert!(app.messages.is_empty());
+        assert!(app.store.history(&app.session.id).unwrap().is_empty());
+        assert_eq!(app.store.history(&previous_session).unwrap().len(), 1);
+
+        app.input = "只属于新对话".into();
+        app.send().await.unwrap();
+        let current_history = app.store.history(&app.session.id).unwrap();
+        assert_eq!(current_history.len(), 1);
+        assert_eq!(current_history[0].content, "只属于新对话");
     }
 }
