@@ -7,7 +7,7 @@ use std::sync::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{Event, EventStream, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -18,12 +18,15 @@ use crate::{
     agent::ChatAgent,
     config::AppConfig,
     memory::{SessionSummary, Store, StoredMessage},
-    provider::{ChatStream, Role, StreamEvent, TokenUsage, factory},
+    provider::{ChatStream, Role, StreamEvent, TokenUsage},
     tui::{
         chat::{self, ChatView, VisibleMessage},
         slash,
     },
 };
+
+mod commands;
+mod input;
 
 pub async fn run(
     agent: ChatAgent,
@@ -76,6 +79,13 @@ struct ModelPicker {
     selected: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ChatFocus {
+    #[default]
+    Input,
+    History,
+}
+
 struct ChatApp {
     agent: ChatAgent,
     store: Store,
@@ -87,6 +97,8 @@ struct ChatApp {
     input: String,
     completion_index: usize,
     model_picker: Option<ModelPicker>,
+    focus: ChatFocus,
+    history_scroll: u16,
     stream: Option<ChatStream>,
     cancellation: Option<Arc<AtomicBool>>,
     streaming_text: String,
@@ -118,6 +130,8 @@ impl ChatApp {
             input: String::new(),
             completion_index: 0,
             model_picker: None,
+            focus: ChatFocus::Input,
+            history_scroll: 0,
             stream: None,
             cancellation: None,
             streaming_text: String::new(),
@@ -197,6 +211,8 @@ impl ChatApp {
                     input: &self.input,
                     slash_suggestions: &suggestions,
                     selected_suggestion,
+                    history_focused: self.focus == ChatFocus::History,
+                    history_scroll: self.history_scroll,
                     model_picker: self
                         .model_picker
                         .as_ref()
@@ -211,110 +227,13 @@ impl ChatApp {
         Ok(())
     }
 
-    async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if self.model_picker.is_some() {
-            return self.handle_model_picker_key(key).await;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return match key.code {
-                KeyCode::Char('c') => {
-                    if self.stream.is_some() {
-                        self.cancel_generation()?;
-                    }
-                    Ok(false)
-                }
-                KeyCode::Char('n') => {
-                    if self.stream.is_some() {
-                        self.cancel_generation()?;
-                    }
-                    self.open_session(self.store.create_session()?)?;
-                    Ok(true)
-                }
-                KeyCode::Char('l') => {
-                    if self.stream.is_some() {
-                        self.cancel_generation()?;
-                    }
-                    self.switch_session()?;
-                    Ok(true)
-                }
-                KeyCode::Char('p') => {
-                    if self.stream.is_none() {
-                        self.show_model_picker().await;
-                    }
-                    Ok(true)
-                }
-                KeyCode::Char('o') => {
-                    if self.stream.is_none() {
-                        self.handle_slash_command("/help").await;
-                    }
-                    Ok(true)
-                }
-                _ => Ok(true),
-            };
-        }
-
-        if self.stream.is_none() && self.handle_completion_key(key.code) {
-            return Ok(true);
-        }
-
-        match key.code {
-            KeyCode::Esc if self.stream.is_some() => self.cancel_generation()?,
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if self.stream.is_none() {
-                    self.input.push('\n');
-                }
-            }
-            KeyCode::Enter => self.send().await?,
-            KeyCode::Backspace if self.stream.is_none() => {
-                self.input.pop();
-                self.completion_index = 0;
-            }
-            KeyCode::Char(character) if self.stream.is_none() => {
-                self.input.push(character);
-                self.completion_index = 0;
-            }
-            _ => {}
-        }
-        Ok(true)
-    }
-
-    fn handle_completion_key(&mut self, key: KeyCode) -> bool {
-        let suggestions = slash::suggestions(&self.input);
-        if suggestions.is_empty() {
-            return false;
-        }
-        match key {
-            KeyCode::Up => {
-                self.completion_index = self
-                    .completion_index
-                    .checked_sub(1)
-                    .unwrap_or(suggestions.len() - 1);
-                true
-            }
-            KeyCode::Down => {
-                self.completion_index = (self.completion_index + 1) % suggestions.len();
-                true
-            }
-            KeyCode::Tab => {
-                let command = suggestions[self.completion_index % suggestions.len()];
-                self.input.clear();
-                self.input.push_str(command.name);
-                if command.takes_argument {
-                    self.input.push(' ');
-                }
-                self.completion_index = 0;
-                true
-            }
-            _ => false,
-        }
-    }
-
     async fn send(&mut self) -> Result<()> {
         if self.stream.is_some() || self.input.trim().is_empty() {
             return Ok(());
         }
         self.error = None;
+        self.focus = ChatFocus::Input;
+        self.history_scroll = 0;
         let input = std::mem::take(&mut self.input);
         if input.trim_start().starts_with('/') {
             self.handle_slash_command(input.trim()).await;
@@ -336,163 +255,6 @@ impl ChatApp {
         self.cancellation = Some(cancellation);
         self.streaming_text.clear();
         self.reasoning_text.clear();
-        Ok(())
-    }
-
-    async fn handle_slash_command(&mut self, command: &str) {
-        self.error = None;
-        if let Err(error) = self.execute_slash_command(command).await {
-            self.error = Some(error.to_string());
-        }
-    }
-
-    async fn execute_slash_command(&mut self, command: &str) -> Result<()> {
-        let mut arguments = command.split_whitespace();
-        let name = arguments.next().unwrap_or_default();
-        match name {
-            "/help" => self.add_system_message(slash::help_text()),
-            "/status" => self.add_system_message(format!(
-                "Provider：{}  模型：{}  推理显示：{}",
-                self.agent.provider_id(),
-                self.agent.model(),
-                if self.show_reasoning { "开" } else { "关" }
-            )),
-            "/providers" => {
-                self.add_system_message(format!(
-                    "可用 Provider：{}",
-                    factory::PROVIDER_IDS.join(", ")
-                ));
-            }
-            "/provider" => {
-                if let Some(provider_id) = arguments.next() {
-                    anyhow::ensure!(arguments.next().is_none(), "用法：/provider <名称>");
-                    self.switch_provider(provider_id).await?;
-                } else {
-                    self.add_system_message(format!(
-                        "当前 Provider：{}；可用：{}",
-                        self.agent.provider_id(),
-                        factory::PROVIDER_IDS.join(", ")
-                    ));
-                }
-            }
-            "/models" => self.open_model_picker().await?,
-            "/model" => {
-                if let Some(model) = arguments.next() {
-                    anyhow::ensure!(arguments.next().is_none(), "用法：/model <模型 ID>");
-                    self.switch_model(model).await?;
-                } else {
-                    self.open_model_picker().await?;
-                }
-            }
-            "/new" | "/clear" => {
-                anyhow::ensure!(arguments.next().is_none(), "用法：{name}");
-                self.open_session(self.store.create_session()?)?;
-            }
-            "/reasoning" => {
-                let enabled = match arguments.next() {
-                    Some("on") => true,
-                    Some("off") => false,
-                    _ => anyhow::bail!("用法：/reasoning on|off"),
-                };
-                anyhow::ensure!(arguments.next().is_none(), "用法：/reasoning on|off");
-                self.show_reasoning = enabled;
-                self.config.display.show_reasoning = enabled;
-                self.config.save(&self.config_path)?;
-                self.add_system_message(if enabled {
-                    "已显示推理内容；推理内容不会保存。"
-                } else {
-                    "已隐藏推理内容。"
-                });
-            }
-            _ => anyhow::bail!("未知命令“{name}”；输入 /help 查看可用命令"),
-        }
-        Ok(())
-    }
-
-    async fn show_model_picker(&mut self) {
-        self.error = None;
-        if let Err(error) = self.open_model_picker().await {
-            self.error = Some(error.to_string());
-        }
-    }
-
-    async fn open_model_picker(&mut self) -> Result<()> {
-        let mut models = self
-            .agent
-            .models()
-            .await?
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<Vec<_>>();
-        models.sort();
-        models.dedup();
-        anyhow::ensure!(
-            !models.is_empty(),
-            "Provider“{}”当前没有可选模型",
-            self.agent.provider_id()
-        );
-        let selected = models
-            .iter()
-            .position(|model| model == self.agent.model())
-            .unwrap_or(0);
-        self.model_picker = Some(ModelPicker { models, selected });
-        self.input.clear();
-        Ok(())
-    }
-
-    async fn handle_model_picker_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return Ok(false);
-        }
-        let Some(picker) = self.model_picker.as_mut() else {
-            return Ok(true);
-        };
-        match key.code {
-            KeyCode::Up => {
-                picker.selected = picker
-                    .selected
-                    .checked_sub(1)
-                    .unwrap_or(picker.models.len() - 1);
-            }
-            KeyCode::Down => picker.selected = (picker.selected + 1) % picker.models.len(),
-            KeyCode::Enter => {
-                let model = picker.models[picker.selected].clone();
-                self.model_picker = None;
-                if let Err(error) = self.switch_model(&model).await {
-                    self.error = Some(error.to_string());
-                }
-            }
-            KeyCode::Esc => self.model_picker = None,
-            _ => {}
-        }
-        Ok(true)
-    }
-
-    async fn switch_provider(&mut self, provider_id: &str) -> Result<()> {
-        let model = factory::default_model(provider_id)
-            .ok_or_else(|| anyhow::anyhow!("未知 Provider“{provider_id}”"))?;
-        let provider = factory::create(provider_id, &self.config, self.process_api_key.clone())?;
-        let agent = ChatAgent::new(provider, model);
-        validate_agent(&agent).await?;
-        self.agent = agent;
-        self.config.chat.provider = provider_id.to_owned();
-        self.config.chat.model = model.to_owned();
-        self.config.save(&self.config_path)?;
-        self.add_system_message(format!("已切换到 Provider：{provider_id}，模型：{model}。"));
-        Ok(())
-    }
-
-    async fn switch_model(&mut self, model: &str) -> Result<()> {
-        let models = self.agent.models().await?;
-        anyhow::ensure!(
-            models.iter().any(|candidate| candidate.id == model),
-            "模型“{model}”当前不可用；输入 /models 查看模型列表"
-        );
-        self.agent.set_model(model);
-        self.config.chat.provider = self.agent.provider_id().to_owned();
-        self.config.chat.model = model.to_owned();
-        self.config.save(&self.config_path)?;
-        self.add_system_message(format!("已切换到模型：{model}。"));
         Ok(())
     }
 
@@ -571,6 +333,8 @@ impl ChatApp {
         self.streaming_text.clear();
         self.reasoning_text.clear();
         self.model_picker = None;
+        self.focus = ChatFocus::Input;
+        self.history_scroll = 0;
         self.error = None;
         Ok(())
     }
@@ -589,80 +353,4 @@ async fn next_stream_event(stream: &mut Option<ChatStream>) -> Option<StreamEven
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::provider::mock::MockProvider;
-
-    #[tokio::test]
-    async fn slash_completion_and_model_selection_are_persistent() {
-        let directory = tempfile::tempdir().unwrap();
-        let config_path = directory.path().join("config.toml");
-        let mut config = AppConfig::default();
-        config.chat.provider = "mock".into();
-        config.chat.model = "komari-mock".into();
-        let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
-        let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
-        let mut app = ChatApp::new(agent, store, config, config_path.clone(), None).unwrap();
-
-        app.input = "/pro".into();
-        assert!(app.handle_completion_key(KeyCode::Down));
-        assert!(app.handle_completion_key(KeyCode::Tab));
-        assert_eq!(app.input, "/provider ");
-        app.input.clear();
-
-        app.open_model_picker().await.unwrap();
-        assert_eq!(app.model_picker.as_ref().unwrap().models, ["komari-mock"]);
-        app.model_picker
-            .as_mut()
-            .unwrap()
-            .models
-            .push("another-model".into());
-        app.handle_model_picker_key(KeyEvent::from(KeyCode::Down))
-            .await
-            .unwrap();
-        assert_eq!(app.model_picker.as_ref().unwrap().selected, 1);
-        app.handle_model_picker_key(KeyEvent::from(KeyCode::Up))
-            .await
-            .unwrap();
-        assert_eq!(app.model_picker.as_ref().unwrap().selected, 0);
-        app.handle_model_picker_key(KeyEvent::from(KeyCode::Enter))
-            .await
-            .unwrap();
-        assert!(app.model_picker.is_none());
-
-        let saved = AppConfig::load(&config_path).unwrap();
-        assert_eq!(saved.chat.provider, "mock");
-        assert_eq!(saved.chat.model, "komari-mock");
-        assert_eq!(app.messages.last().unwrap().role, Role::System);
-        assert!(app.store.history(&app.session.id).unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn clear_starts_with_no_prior_conversation_history() {
-        let directory = tempfile::tempdir().unwrap();
-        let config_path = directory.path().join("config.toml");
-        let mut config = AppConfig::default();
-        config.chat.provider = "mock".into();
-        config.chat.model = "komari-mock".into();
-        let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
-        let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
-        let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
-        let previous_session = app.session.id.clone();
-        app.store
-            .save_message(&previous_session, Role::User, "上一段对话", false)
-            .unwrap();
-
-        app.execute_slash_command("/clear").await.unwrap();
-
-        assert_ne!(app.session.id, previous_session);
-        assert!(app.messages.is_empty());
-        assert!(app.store.history(&app.session.id).unwrap().is_empty());
-        assert_eq!(app.store.history(&previous_session).unwrap().len(), 1);
-
-        app.input = "只属于新对话".into();
-        app.send().await.unwrap();
-        let current_history = app.store.history(&app.session.id).unwrap();
-        assert_eq!(current_history.len(), 1);
-        assert_eq!(current_history[0].content, "只属于新对话");
-    }
-}
+mod tests;

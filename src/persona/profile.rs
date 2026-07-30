@@ -4,6 +4,8 @@ const KOMARI_PROFILE: &str = include_str!("../../personas/komari.yaml");
 const KOMARI_RELATIONSHIPS: &str = include_str!("../../personas/komari/relationships.yaml");
 const KOMARI_VOLUME_3_ARC: &str = include_str!("../../personas/komari/volume-3-arc.yaml");
 const KOMARI_BEHAVIOR: &str = include_str!("../../personas/komari/behavior.yaml");
+const KOMARI_CONVERSATION_PLAYBOOK: &str =
+    include_str!("../../personas/komari/conversation-playbook.yaml");
 const KOMARI_EVIDENCE_INDEX: &str = include_str!("../../personas/komari/evidence-index.yaml");
 
 static DEFAULT_CONTEXT: LazyLock<String> = LazyLock::new(|| {
@@ -12,6 +14,7 @@ static DEFAULT_CONTEXT: LazyLock<String> = LazyLock::new(|| {
         KOMARI_RELATIONSHIPS,
         KOMARI_VOLUME_3_ARC,
         KOMARI_BEHAVIOR,
+        KOMARI_CONVERSATION_PLAYBOOK,
         KOMARI_EVIDENCE_INDEX,
     ] {
         let _: serde_yaml::Value =
@@ -28,6 +31,7 @@ static DEFAULT_CONTEXT: LazyLock<String> = LazyLock::new(|| {
             + KOMARI_RELATIONSHIPS.len()
             + KOMARI_VOLUME_3_ARC.len()
             + KOMARI_BEHAVIOR.len()
+            + KOMARI_CONVERSATION_PLAYBOOK.len()
             + 128,
     );
     context.push_str(prefix);
@@ -36,6 +40,7 @@ static DEFAULT_CONTEXT: LazyLock<String> = LazyLock::new(|| {
         ("人物关系", KOMARI_RELATIONSHIPS),
         ("第三卷人物弧光", KOMARI_VOLUME_3_ARC),
         ("行为模型", KOMARI_BEHAVIOR),
+        ("自然聊天剧本", KOMARI_CONVERSATION_PLAYBOOK),
     ] {
         context.push_str("## ");
         context.push_str(title);
@@ -70,6 +75,11 @@ mod tests {
         assert!(default_context().contains("小鞠曾向玉木告白并被拒绝"));
         assert!(default_context().contains("玉木和古都也一直真心疼爱"));
         assert!(default_context().contains("不是 Coding Agent"));
+        let playbook: serde_yaml::Value =
+            serde_yaml::from_str(KOMARI_CONVERSATION_PLAYBOOK).unwrap();
+        assert!(playbook["emotional_situations"].is_mapping());
+        assert!(playbook["original_style_examples"].is_mapping());
+        assert!(default_context().contains("高兴和不甘心又不冲突"));
     }
 
     #[test]
