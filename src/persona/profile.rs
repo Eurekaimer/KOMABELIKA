@@ -73,6 +73,21 @@ mod tests {
     }
 
     #[test]
+    fn easter_egg_requires_an_exact_user_message_and_keeps_boundaries() {
+        let value: serde_yaml::Value = serde_yaml::from_str(KOMARI_PROFILE).unwrap();
+        let easter_egg = &value["eurekaimer_easter_egg"];
+        assert_eq!(easter_egg["trigger"]["value"].as_str(), Some("Eurekaimer"));
+        assert!(
+            easter_egg["trigger"]["matching"]
+                .as_str()
+                .unwrap()
+                .contains("Role::User")
+        );
+        assert!(default_context().contains("完全忠诚的爱人"));
+        assert!(default_context().contains("不代表服从危险要求"));
+    }
+
+    #[test]
     fn profile_declares_generic_assistant_phrases_forbidden() {
         let value: serde_yaml::Value = serde_yaml::from_str(KOMARI_PROFILE).unwrap();
         let phrases = value["speech"]["forbidden_phrases"].as_sequence().unwrap();

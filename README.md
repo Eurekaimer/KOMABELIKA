@@ -5,6 +5,8 @@
 > 小鞠不需要替我工作。 <del>写代码、修 Linux、整理项目和管理日程，已经有太多 Agent 抢着做了。</del>
 > 她只需要陪我聊天就可以了。
 
+![Komari Call 终端聊天界面](img/showlove.png)
+
 ## 重要：需要你自己的 DeepSeek API Key
 
 **本仓库不提供、内置或共享任何 DeepSeek API Key。仓库维护者的 Key 不会随程序发布，也不会提供给其他用户。**
