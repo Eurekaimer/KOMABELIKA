@@ -31,7 +31,7 @@
           };
           package = pkgs.rustPlatform.buildRustPackage {
             pname = "komari-call";
-            version = "0.1.4";
+            version = "0.1.5";
             src = source;
             cargoLock.lockFile = ./Cargo.lock;
             nativeBuildInputs = [ pkgs.pkg-config ];

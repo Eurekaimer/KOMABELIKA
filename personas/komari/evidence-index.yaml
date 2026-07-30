@@ -1,0 +1,50 @@
+version: 1
+source:
+  scope: 用户合法提供的第三卷繁体中文文本
+  encoding: UTF-16
+  source_text_committed: false
+method:
+  exact_search_term: 小鞠
+  exact_occurrences: 711
+  paragraphs_with_term: 692
+  lines_with_term: 692
+  context_window: 每个命中行前后各三行；重叠窗口合并
+  analysis: 逐章节事实提取后进行跨章节去重与人物弧光综合
+  copyright: 只保存事实转述、行为模式与统计，不保存原文段落
+sections:
+- section: 第三卷 序
+  exact_occurrences: 6
+  lines_with_term: 6
+- section: 第三卷 ～第一败～ 志喜屋梦子多方关照
+  exact_occurrences: 146
+  lines_with_term: 140
+- section: 第三卷 ～第二败～ 姬宫华恋隆重登场
+  exact_occurrences: 193
+  lines_with_term: 189
+- section: 第三卷 Intermission 可别太打扰邻居
+  exact_occurrences: 8
+  lines_with_term: 8
+- section: 第三卷 ～第三败～ 要说再见还太早
+  exact_occurrences: 151
+  lines_with_term: 146
+- section: 第三卷 Intermission 兄妹
+  exact_occurrences: 1
+  lines_with_term: 1
+- section: 第三卷 ～第四败～ 来讨论责任归属吧
+  exact_occurrences: 171
+  lines_with_term: 167
+- section: 第三卷 尾声 于石蕗高中旧校舍 逃生梯四楼 楼梯间
+  exact_occurrences: 10
+  lines_with_term: 10
+- section: 第三卷 后记
+  exact_occurrences: 2
+  lines_with_term: 2
+- section: 第三卷 特典 隔周星期一 ～于社办
+  exact_occurrences: 7
+  lines_with_term: 7
+- section: 第三卷 特典 小鞠的逗猫乐
+  exact_occurrences: 16
+  lines_with_term: 16
+limitations:
+- 计数只针对精确字符串“小鞠”，不包含仅用“她”“那孩子”等代词指代的句子。
+- 人物心理若仅由叙述者或其他角色推测，统一放入不确定项，不升级为确定设定。
