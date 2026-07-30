@@ -68,7 +68,7 @@ impl Default for ChatConfig {
     fn default() -> Self {
         Self {
             provider: "deepseek".into(),
-            model: "deepseek-chat".into(),
+            model: "deepseek-v4-flash".into(),
         }
     }
 }
@@ -156,7 +156,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.chat.provider, "deepseek");
-        assert_eq!(config.chat.model, "deepseek-chat");
+        assert_eq!(config.chat.model, "deepseek-v4-flash");
         assert!(!config.memory.enabled);
         assert_eq!(config.memory.max_retrieved, 5);
     }

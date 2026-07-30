@@ -14,7 +14,7 @@ pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "mock"];
 
 pub fn default_model(provider_id: &str) -> Option<&'static str> {
     match provider_id {
-        "deepseek" => Some("deepseek-chat"),
+        "deepseek" => Some("deepseek-v4-flash"),
         "mock" => Some("komari-mock"),
         _ => None,
     }

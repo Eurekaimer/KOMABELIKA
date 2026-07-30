@@ -50,7 +50,7 @@ komari-call login deepseek
 komari-call
 ```
 
-默认模型是 `deepseek-chat`。需要更换时可以运行：
+默认模型是当前 API 提供的快速模型 `deepseek-v4-flash`。需要更换时可以运行：
 
 ```bash
 komari-call config --model <模型 ID>
