@@ -1,6 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+
+#[cfg(target_os = "linux")]
 const SERVICE: &str = "komari-call";
+#[cfg(target_os = "linux")]
 const DEEPSEEK_ACCOUNT: &str = "deepseek-api-key";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

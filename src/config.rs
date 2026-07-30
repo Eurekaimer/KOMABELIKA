@@ -67,8 +67,8 @@ pub struct DeepSeekConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
-            provider: "mock".into(),
-            model: "komari-mock".into(),
+            provider: "deepseek".into(),
+            model: "deepseek-chat".into(),
         }
     }
 }
@@ -149,14 +149,15 @@ mod tests {
     fn parses_partial_configuration_with_defaults() {
         let config: AppConfig = toml::from_str(
             r#"
-                [chat]
-                provider = "mock"
+                [memory]
+                enabled = false
             "#,
         )
         .unwrap();
 
-        assert_eq!(config.chat.model, "komari-mock");
-        assert!(config.memory.enabled);
+        assert_eq!(config.chat.provider, "deepseek");
+        assert_eq!(config.chat.model, "deepseek-chat");
+        assert!(!config.memory.enabled);
         assert_eq!(config.memory.max_retrieved, 5);
     }
 

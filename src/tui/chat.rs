@@ -1,10 +1,11 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::provider::Role;
 
@@ -111,15 +112,19 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
         .scroll((scroll, 0));
     frame.render_widget(conversation, chunks[1]);
 
+    let input_viewport = input_viewport(view.input, chunks[2]);
     let input = Paragraph::new(view.input)
         .block(Block::default().title(" 输入 ").borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
+        .scroll((
+            input_viewport.vertical_scroll,
+            input_viewport.horizontal_scroll,
+        ));
     frame.render_widget(input, chunks[2]);
 
     let footer_text = view.error.map_or_else(
         || {
             format!(
-                "Enter 发送  Shift+Enter 换行  Esc 取消  Ctrl+N 新会话  Ctrl+L 切换  Ctrl+C 退出  tokens {}→{}",
+                "Enter 发送  Esc 取消  Ctrl+N 新会话  Ctrl+P 切换 Provider  /help 命令  Ctrl+C 退出  tokens {}→{}",
                 view.input_tokens, view.output_tokens
             )
         },
@@ -135,13 +140,63 @@ pub fn render(frame: &mut Frame<'_>, view: ChatView<'_>) {
     );
 
     if !view.generating {
-        let last_line = view.input.rsplit('\n').next().unwrap_or_default();
-        let input_line = view.input.matches('\n').count() as u16;
-        let max_x = chunks[2].right().saturating_sub(2);
-        let max_y = chunks[2].bottom().saturating_sub(2);
-        frame.set_cursor_position((
-            (chunks[2].x + 1 + last_line.chars().count() as u16).min(max_x),
-            (chunks[2].y + 1 + input_line).min(max_y),
-        ));
+        frame.set_cursor_position((input_viewport.cursor_x, input_viewport.cursor_y));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InputViewport {
+    vertical_scroll: u16,
+    horizontal_scroll: u16,
+    cursor_x: u16,
+    cursor_y: u16,
+}
+
+fn input_viewport(input: &str, area: Rect) -> InputViewport {
+    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    let inner_height = area.height.saturating_sub(2).max(1) as usize;
+    let line_index = input.matches('\n').count();
+    let display_column = UnicodeWidthStr::width(input.rsplit('\n').next().unwrap_or_default());
+    let horizontal_scroll = display_column.saturating_sub(inner_width.saturating_sub(1));
+    let vertical_scroll = line_index.saturating_sub(inner_height.saturating_sub(1));
+
+    InputViewport {
+        vertical_scroll: vertical_scroll.min(u16::MAX as usize) as u16,
+        horizontal_scroll: horizontal_scroll.min(u16::MAX as usize) as u16,
+        cursor_x: area.x
+            + 1
+            + display_column
+                .saturating_sub(horizontal_scroll)
+                .min(u16::MAX as usize) as u16,
+        cursor_y: area.y
+            + 1
+            + line_index
+                .saturating_sub(vertical_scroll)
+                .min(u16::MAX as usize) as u16,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const AREA: Rect = Rect::new(10, 5, 10, 5);
+
+    #[test]
+    fn cursor_uses_terminal_width_for_chinese_text() {
+        let viewport = input_viewport("晚上好", AREA);
+        assert_eq!(viewport.cursor_x, 17);
+        assert_eq!(viewport.cursor_y, 6);
+    }
+
+    #[test]
+    fn cursor_scrolls_with_long_and_multiline_input() {
+        let horizontal = input_viewport("123456789", AREA);
+        assert_eq!(horizontal.horizontal_scroll, 2);
+        assert_eq!(horizontal.cursor_x, 18);
+
+        let vertical = input_viewport("一\n二\n三\n四", AREA);
+        assert_eq!(vertical.vertical_scroll, 1);
+        assert_eq!(vertical.cursor_y, 8);
     }
 }

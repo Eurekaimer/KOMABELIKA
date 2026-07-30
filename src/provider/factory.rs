@@ -10,6 +10,16 @@ use super::{
     mock::MockProvider,
 };
 
+pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "mock"];
+
+pub fn default_model(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "deepseek" => Some("deepseek-chat"),
+        "mock" => Some("komari-mock"),
+        _ => None,
+    }
+}
+
 pub fn create(
     provider_id: &str,
     config: &AppConfig,

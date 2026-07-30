@@ -1,4 +1,5 @@
 use std::io::{self, stdout};
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -15,16 +16,20 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::{
     agent::ChatAgent,
+    config::AppConfig,
     memory::{SessionSummary, Store, StoredMessage},
-    provider::{ChatStream, Role, StreamEvent, TokenUsage},
+    provider::{ChatStream, Role, StreamEvent, TokenUsage, factory},
     tui::chat::{self, ChatView, VisibleMessage},
 };
 
-pub async fn run(agent: ChatAgent, store: Store, show_reasoning: bool) -> Result<()> {
-    let models = agent.models().await?;
-    if !agent.capabilities().streaming || models.iter().all(|model| model.id != agent.model()) {
-        anyhow::bail!("当前 Provider 不支持所选流式模型");
-    }
+pub async fn run(
+    agent: ChatAgent,
+    store: Store,
+    config: AppConfig,
+    config_path: PathBuf,
+    process_api_key: Option<String>,
+) -> Result<()> {
+    validate_agent(&agent).await?;
 
     enable_raw_mode()?;
     let mut output = stdout();
@@ -33,11 +38,27 @@ pub async fn run(agent: ChatAgent, store: Store, show_reasoning: bool) -> Result
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let result = ChatApp::new(agent, store, show_reasoning)?
+    let result = ChatApp::new(agent, store, config, config_path, process_api_key)?
         .run(&mut terminal)
         .await;
     let restore_result = restore_terminal(&mut terminal);
     result.and(restore_result)
+}
+
+async fn validate_agent(agent: &ChatAgent) -> Result<()> {
+    anyhow::ensure!(
+        agent.capabilities().streaming,
+        "Provider '{}' 不支持流式输出",
+        agent.provider_id()
+    );
+    let models = agent.models().await?;
+    anyhow::ensure!(
+        models.iter().any(|model| model.id == agent.model()),
+        "Provider '{}' 当前没有模型 '{}'",
+        agent.provider_id(),
+        agent.model()
+    );
+    Ok(())
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -50,6 +71,9 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 struct ChatApp {
     agent: ChatAgent,
     store: Store,
+    config: AppConfig,
+    config_path: PathBuf,
+    process_api_key: Option<String>,
     session: SessionSummary,
     messages: Vec<StoredMessage>,
     input: String,
@@ -63,12 +87,22 @@ struct ChatApp {
 }
 
 impl ChatApp {
-    fn new(agent: ChatAgent, store: Store, show_reasoning: bool) -> Result<Self> {
+    fn new(
+        agent: ChatAgent,
+        store: Store,
+        config: AppConfig,
+        config_path: PathBuf,
+        process_api_key: Option<String>,
+    ) -> Result<Self> {
         let session = store.latest_or_create_session()?;
         let messages = store.load_messages(&session.id)?;
         Ok(Self {
             agent,
             store,
+            show_reasoning: config.display.show_reasoning,
+            config,
+            config_path,
+            process_api_key,
             session,
             messages,
             input: String::new(),
@@ -76,7 +110,6 @@ impl ChatApp {
             cancellation: None,
             streaming_text: String::new(),
             reasoning_text: String::new(),
-            show_reasoning,
             usage: TokenUsage::default(),
             error: None,
         })
@@ -174,11 +207,15 @@ impl ChatApp {
                     Ok(true)
                 }
                 KeyCode::Char('p') => {
-                    self.error = Some("MVP 当前只有 Mock Provider".into());
+                    if self.stream.is_none() {
+                        self.input = "/provider ".into();
+                    }
                     Ok(true)
                 }
                 KeyCode::Char('o') => {
-                    self.error = Some("配置 TUI 将在 Provider 接入阶段开放".into());
+                    if self.stream.is_none() {
+                        self.handle_slash_command("/help").await;
+                    }
                     Ok(true)
                 }
                 _ => Ok(true),
@@ -208,6 +245,10 @@ impl ChatApp {
         }
         self.error = None;
         let input = std::mem::take(&mut self.input);
+        if input.trim_start().starts_with('/') {
+            self.handle_slash_command(input.trim()).await;
+            return Ok(());
+        }
         self.store
             .save_message(&self.session.id, Role::User, &input, false)?;
         self.session.title = self
@@ -225,6 +266,121 @@ impl ChatApp {
         self.streaming_text.clear();
         self.reasoning_text.clear();
         Ok(())
+    }
+
+    async fn handle_slash_command(&mut self, command: &str) {
+        self.error = None;
+        if let Err(error) = self.execute_slash_command(command).await {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    async fn execute_slash_command(&mut self, command: &str) -> Result<()> {
+        let mut arguments = command.split_whitespace();
+        let name = arguments.next().unwrap_or_default();
+        match name {
+            "/help" => self.add_system_message(
+                "/status  当前状态\n/providers  可用 Provider\n/provider <名称>  切换 Provider\n/models  当前 Provider 的模型\n/model <ID>  切换模型\n/new  新建会话\n/reasoning on|off  显示或隐藏推理内容",
+            ),
+            "/status" => self.add_system_message(format!(
+                "Provider：{}  模型：{}  推理显示：{}",
+                self.agent.provider_id(),
+                self.agent.model(),
+                if self.show_reasoning { "开" } else { "关" }
+            )),
+            "/providers" => {
+                self.add_system_message(format!("可用 Provider：{}", factory::PROVIDER_IDS.join(", ")));
+            }
+            "/provider" => {
+                if let Some(provider_id) = arguments.next() {
+                    anyhow::ensure!(arguments.next().is_none(), "用法：/provider <名称>");
+                    self.switch_provider(provider_id).await?;
+                } else {
+                    self.add_system_message(format!(
+                        "当前 Provider：{}；可用：{}",
+                        self.agent.provider_id(),
+                        factory::PROVIDER_IDS.join(", ")
+                    ));
+                }
+            }
+            "/models" => {
+                let mut models = self.agent.models().await?;
+                models.sort_by(|left, right| left.id.cmp(&right.id));
+                let list = models
+                    .into_iter()
+                    .map(|model| model.id)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.add_system_message(format!("可用模型：\n{list}"));
+            }
+            "/model" => {
+                if let Some(model) = arguments.next() {
+                    anyhow::ensure!(arguments.next().is_none(), "用法：/model <模型 ID>");
+                    self.switch_model(model).await?;
+                } else {
+                    self.add_system_message(format!("当前模型：{}", self.agent.model()));
+                }
+            }
+            "/new" => {
+                anyhow::ensure!(arguments.next().is_none(), "用法：/new");
+                self.open_session(self.store.create_session()?)?;
+                self.add_system_message("已新建会话。");
+            }
+            "/reasoning" => {
+                let enabled = match arguments.next() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => anyhow::bail!("用法：/reasoning on|off"),
+                };
+                anyhow::ensure!(arguments.next().is_none(), "用法：/reasoning on|off");
+                self.show_reasoning = enabled;
+                self.config.display.show_reasoning = enabled;
+                self.config.save(&self.config_path)?;
+                self.add_system_message(if enabled {
+                    "已显示推理内容；推理内容不会保存。"
+                } else {
+                    "已隐藏推理内容。"
+                });
+            }
+            _ => anyhow::bail!("未知命令“{name}”；输入 /help 查看可用命令"),
+        }
+        Ok(())
+    }
+
+    async fn switch_provider(&mut self, provider_id: &str) -> Result<()> {
+        let model = factory::default_model(provider_id)
+            .ok_or_else(|| anyhow::anyhow!("未知 Provider“{provider_id}”"))?;
+        let provider = factory::create(provider_id, &self.config, self.process_api_key.clone())?;
+        let agent = ChatAgent::new(provider, model);
+        validate_agent(&agent).await?;
+        self.agent = agent;
+        self.config.chat.provider = provider_id.to_owned();
+        self.config.chat.model = model.to_owned();
+        self.config.save(&self.config_path)?;
+        self.add_system_message(format!("已切换到 Provider：{provider_id}，模型：{model}。"));
+        Ok(())
+    }
+
+    async fn switch_model(&mut self, model: &str) -> Result<()> {
+        let models = self.agent.models().await?;
+        anyhow::ensure!(
+            models.iter().any(|candidate| candidate.id == model),
+            "模型“{model}”当前不可用；输入 /models 查看模型列表"
+        );
+        self.agent.set_model(model);
+        self.config.chat.provider = self.agent.provider_id().to_owned();
+        self.config.chat.model = model.to_owned();
+        self.config.save(&self.config_path)?;
+        self.add_system_message(format!("已切换到模型：{model}。"));
+        Ok(())
+    }
+
+    fn add_system_message(&mut self, content: impl Into<String>) {
+        self.messages.push(StoredMessage {
+            role: Role::System,
+            content: content.into(),
+            interrupted: false,
+        });
     }
 
     fn handle_stream_event(&mut self, event: StreamEvent) -> Result<()> {
@@ -307,5 +463,33 @@ async fn next_stream_event(stream: &mut Option<ChatStream>) -> Option<StreamEven
     match stream {
         Some(stream) => stream.next().await,
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::mock::MockProvider;
+
+    #[tokio::test]
+    async fn slash_model_command_persists_without_entering_chat_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.chat.provider = "mock".into();
+        config.chat.model = "komari-mock".into();
+        let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+        let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
+        let mut app = ChatApp::new(agent, store, config, config_path.clone(), None).unwrap();
+
+        app.execute_slash_command("/model komari-mock")
+            .await
+            .unwrap();
+
+        let saved = AppConfig::load(&config_path).unwrap();
+        assert_eq!(saved.chat.provider, "mock");
+        assert_eq!(saved.chat.model, "komari-mock");
+        assert_eq!(app.messages.last().unwrap().role, Role::System);
+        assert!(app.store.history(&app.session.id).unwrap().is_empty());
     }
 }

@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _ = dotenvy::dotenv();
     let cli = Cli::parse();
     let project_dirs = project_dirs()?;
     let config_path = config_path(&project_dirs);
@@ -29,8 +30,12 @@ async fn main() -> Result<()> {
     let data_dir = data_dir(&project_dirs);
 
     match cli.command {
-        None => commands::chat::run(&config, &data_dir, ChatArgs::default()).await,
-        Some(Command::Chat(args)) => commands::chat::run(&config, &data_dir, args).await,
+        None => {
+            commands::chat::run(&mut config, &config_path, &data_dir, ChatArgs::default()).await
+        }
+        Some(Command::Chat(args)) => {
+            commands::chat::run(&mut config, &config_path, &data_dir, args).await
+        }
         Some(Command::Config(args)) => commands::configure::run(&mut config, &config_path, args),
         Some(Command::Models(args)) => commands::models::run(&config, args).await,
         Some(Command::Login(args)) => commands::credentials::login(args),
