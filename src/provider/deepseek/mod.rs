@@ -42,7 +42,9 @@ impl DeepSeekProvider {
         );
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
-            .timeout(settings.timeout)
+            // Streaming replies may legitimately exceed the configured duration;
+            // fail only when the connection stops producing data for that long.
+            .read_timeout(settings.timeout)
             .user_agent(concat!("komari-call/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {

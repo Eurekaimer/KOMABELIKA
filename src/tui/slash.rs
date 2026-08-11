@@ -56,6 +56,24 @@ pub const COMMANDS: &[SlashCommand] = &[
         takes_argument: false,
     },
     SlashCommand {
+        name: "/login",
+        usage: "/login [provider]",
+        description: "在当前输入框安全保存 Provider API Key",
+        takes_argument: true,
+    },
+    SlashCommand {
+        name: "/border",
+        usage: "/border plain|rounded|double|thick",
+        description: "设置并保存边框线条样式",
+        takes_argument: true,
+    },
+    SlashCommand {
+        name: "/text",
+        usage: "/text normal|bold",
+        description: "设置并保存绿色正文粗细",
+        takes_argument: true,
+    },
+    SlashCommand {
         name: "/reasoning",
         usage: "/reasoning on|off",
         description: "显示或隐藏推理内容",
@@ -110,5 +128,9 @@ mod tests {
         assert_eq!(provider.len(), 1);
         assert_eq!(provider[0].usage, "/provider <名称>");
         assert!(suggestions("晚上好").is_empty());
+
+        let login = suggestions("/log");
+        assert_eq!(login.len(), 1);
+        assert_eq!(login[0].name, "/login");
     }
 }

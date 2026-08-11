@@ -23,11 +23,14 @@ pub async fn run(
             .expect("CLI providers must define a default model")
     });
     let process_api_key = args.api_key;
-    let provider = factory::create(&provider_id, config, process_api_key.clone())?;
+    let agent = match factory::create(&provider_id, config, process_api_key.clone()) {
+        Ok(provider) => Some(ChatAgent::new(provider, model)),
+        Err(error) if error.downcast_ref::<factory::MissingCredential>().is_some() => None,
+        Err(error) => return Err(error),
+    };
     std::fs::create_dir_all(data_dir)
         .with_context(|| format!("failed to create {}", data_dir.display()))?;
     let store = Store::open(data_dir.join("komari-call.sqlite3"))?;
-    let agent = ChatAgent::new(provider, model);
     app::run(
         agent,
         store,

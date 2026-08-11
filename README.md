@@ -58,6 +58,8 @@ komari-call models --provider opencode-go
 komari-call
 ```
 
+如果不想先退出到 Shell，缺少凭据时也可以直接运行 `komari-call`。进入 TUI 后输入 `/login`，或输入 `/login opencode-go`，API Key 会在当前输入框中以圆点隐藏显示；按 `Enter` 验证并保存，按 `Esc` 取消。
+
 也可以使用环境变量，或用 `chat --api-key` / `models --api-key` 只为当前进程提供所选 Provider 的 Key：
 
 ```bash
@@ -66,6 +68,8 @@ export OPENCODE_API_KEY='<OpenCode Go Key>'
 ```
 
 OpenCode Go 的模型选择器目前只显示官方使用 OpenAI-compatible `/chat/completions` 的模型。MiniMax 和 Qwen 需要 Anthropic `/messages`，GPT 5.6 Luna 需要 OpenAI `/responses`；这些协议尚未在本项目中实现，因此不会出现在可选模型中。
+
+`deepseek` Provider 的 `deepseek-v4-flash` 来自 DeepSeek 官方 `https://api.deepseek.com/models`，请求发送到 DeepSeek 官方 API；`opencode-go` 中同名模型来自 OpenCode Go 的 `https://opencode.ai/zen/go/v1/models`，消耗 Go 套餐额度。如果其他客户端展示 `deepseek-v4-flash-free`，该 ID 并未由这两个端点返回；本项目不会把它伪装进 Go 或 DeepSeek 官方接口，以免选中后连接到错误端点。
 
 ## 聊天界面
 
@@ -78,12 +82,17 @@ OpenCode Go 的模型选择器目前只显示官方使用 OpenAI-compatible `/ch
 /provider <名称>          切换 Provider
 /models                   打开模型选择器
 /model <模型 ID>          切换并保存模型
+/login [provider]         在聊天输入框内隐藏输入并保存 API Key
+/border <样式>            设置 plain、rounded、double 或 thick 边框
+/text normal|bold         设置绿色正文粗细
 /clear                    清空上下文并开始新会话
 /new                      开始新会话
 /reasoning on|off         显示或隐藏推理内容
 ```
 
-输入 `/` 后会显示命令候选，使用 `↑`、`↓` 选择，按 `Tab` 补全。
+输入 `/` 后会显示命令候选，使用 `↑`、`↓` 选择；按 `Enter` 直接执行高亮命令，或按 `Tab` 补全后继续输入参数。生成回复时仍可输入下一条消息，按 `Enter` 后会排队并在当前回复完成后自动发送。
+
+默认正文为绿色粗体，边框为 `thick`。终端字符的实际字号和像素级笔画由 Kitty、WezTerm 等终端模拟器控制，TUI 无法可靠地跨终端修改；请使用终端自身的字体缩放快捷键或配置。
 
 键盘操作：
 

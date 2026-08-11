@@ -42,7 +42,8 @@ impl OpenCodeGoProvider {
         );
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
-            .timeout(settings.timeout)
+            // Treat timeout as stream inactivity, not a cap on the whole reply.
+            .read_timeout(settings.timeout)
             .user_agent(concat!("komari-call/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
@@ -169,7 +170,7 @@ fn supports_chat_completions(model: &str) -> bool {
 mod tests {
     use std::{
         io::{Read, Write},
-        net::TcpListener,
+        net::{TcpListener, TcpStream},
         sync::{Arc, atomic::AtomicBool},
         thread,
     };
@@ -180,10 +181,14 @@ mod tests {
     use crate::provider::{ChatMessage, Role, StreamEvent, TokenUsage};
 
     fn provider(base_url: String) -> OpenCodeGoProvider {
+        provider_with_timeout(base_url, Duration::from_secs(5))
+    }
+
+    fn provider_with_timeout(base_url: String, timeout: Duration) -> OpenCodeGoProvider {
         OpenCodeGoProvider::new(
             OpenCodeGoSettings {
                 base_url,
-                timeout: Duration::from_secs(5),
+                timeout,
                 max_tokens: Some(512),
             },
             "test-key".into(),
@@ -200,30 +205,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            loop {
-                let mut chunk = [0_u8; 4096];
-                let count = socket.read(&mut chunk).unwrap();
-                if count == 0 {
-                    break;
-                }
-                request.extend_from_slice(&chunk[..count]);
-                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
-                    let headers = String::from_utf8_lossy(&request[..header_end]);
-                    let content_length = headers
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length: ")
-                                .and_then(|value| value.parse::<usize>().ok())
-                        })
-                        .unwrap_or(0);
-                    if request.len() >= header_end + 4 + content_length {
-                        break;
-                    }
-                }
-            }
-            let request = String::from_utf8(request).unwrap();
+            let request = read_http_request(&mut socket);
             check(&request);
             write!(
                 socket,
@@ -231,6 +213,57 @@ mod tests {
                 body.len()
             )
             .unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 4096];
+            let count = socket.read(&mut chunk).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..count]);
+            if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        String::from_utf8(request).unwrap()
+    }
+
+    fn serve_slow_stream() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _request = read_http_request(&mut socket);
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            for payload in [
+                "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            ] {
+                socket.write_all(payload.as_bytes()).unwrap();
+                socket.flush().unwrap();
+                thread::sleep(Duration::from_millis(60));
+            }
         });
         format!("http://{address}")
     }
@@ -301,6 +334,29 @@ mod tests {
                     input_tokens: 7,
                     output_tokens: 3,
                 }),
+                StreamEvent::Completed,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn active_stream_is_not_cut_off_by_total_request_duration() {
+        let request = ChatRequest {
+            model: "deepseek-v4-flash".into(),
+            messages: Vec::new(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        let events = provider_with_timeout(serve_slow_stream(), Duration::from_millis(100))
+            .stream_chat(request)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(
+            events,
+            [
+                StreamEvent::TextDelta("one".into()),
+                StreamEvent::TextDelta("two".into()),
                 StreamEvent::Completed,
             ]
         );

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::{
     config::AppConfig,
@@ -14,6 +14,16 @@ use super::{
 };
 
 pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "opencode-go"];
+
+#[derive(Debug, thiserror::Error)]
+pub enum MissingCredential {
+    #[error("no DeepSeek API key found; run `komari-call login deepseek` or set DEEPSEEK_API_KEY")]
+    DeepSeek,
+    #[error(
+        "no OpenCode Go API key found; run komari-call login opencode-go or set OPENCODE_API_KEY"
+    )]
+    OpenCodeGo,
+}
 
 pub fn default_model(provider_id: &str) -> Option<&'static str> {
     match provider_id {
@@ -41,9 +51,8 @@ fn create_deepseek(
 ) -> Result<Arc<dyn ChatProvider>> {
     let settings = &config.providers.deepseek;
     anyhow::ensure!(settings.enabled, "DeepSeek is disabled in configuration");
-    let credential = resolve_deepseek(process_api_key, &settings.api_key_env).context(
-        "no DeepSeek API key found; run `komari-call login deepseek` or set DEEPSEEK_API_KEY",
-    )?;
+    let credential = resolve_deepseek(process_api_key, &settings.api_key_env)
+        .ok_or(MissingCredential::DeepSeek)?;
     let provider = DeepSeekProvider::new(
         DeepSeekSettings {
             base_url: settings.base_url.clone(),
@@ -62,9 +71,8 @@ fn create_opencode_go(
 ) -> Result<Arc<dyn ChatProvider>> {
     let settings = &config.providers.opencode_go;
     anyhow::ensure!(settings.enabled, "OpenCode Go is disabled in configuration");
-    let credential = resolve_opencode_go(process_api_key, &settings.api_key_env).context(
-        "no OpenCode Go API key found; run komari-call login opencode-go or set OPENCODE_API_KEY",
-    )?;
+    let credential = resolve_opencode_go(process_api_key, &settings.api_key_env)
+        .ok_or(MissingCredential::OpenCodeGo)?;
     let provider = OpenCodeGoProvider::new(
         OpenCodeGoSettings {
             base_url: settings.base_url.clone(),

@@ -6,6 +6,9 @@ use crate::tui::slash;
 
 impl ChatApp {
     pub(super) async fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.input_mode.is_credential() {
+            return self.handle_credential_key(key).await;
+        }
         if self.model_picker.is_some() {
             return self.handle_model_picker_key(key).await;
         }
@@ -46,6 +49,10 @@ impl ChatApp {
                     if self.stream.is_none() {
                         self.handle_slash_command("/help").await;
                     }
+                    Ok(true)
+                }
+                KeyCode::Char('m') => {
+                    self.submit_input().await?;
                     Ok(true)
                 }
                 _ => Ok(true),
@@ -91,22 +98,51 @@ impl ChatApp {
 
         match key.code {
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if self.stream.is_none() {
-                    self.input.push('\n');
-                }
+                self.input.push('\n');
             }
-            KeyCode::Enter => self.send().await?,
-            KeyCode::Backspace if self.stream.is_none() => {
+            KeyCode::Enter => self.submit_input().await?,
+            KeyCode::Backspace => {
                 self.input.pop();
                 self.completion_index = 0;
             }
-            KeyCode::Char(character) if self.stream.is_none() => {
+            KeyCode::Char(character) => {
                 self.input.push(character);
                 self.completion_index = 0;
             }
             _ => {}
         }
         Ok(true)
+    }
+
+    async fn submit_input(&mut self) -> Result<()> {
+        if self.stream.is_some() {
+            if !self.input.trim().is_empty() {
+                self.pending_send = true;
+                self.error = Some("消息已排队，将在当前回复完成后发送".into());
+            }
+            return Ok(());
+        }
+
+        // Enter executes the highlighted command directly; Tab remains available
+        // when the user wants to keep editing a command with arguments.
+        if !self.input.chars().any(char::is_whitespace) {
+            let suggestions = slash::suggestions(&self.input);
+            if let Some(command) = suggestions.get(
+                self.completion_index
+                    .checked_rem(suggestions.len())
+                    .unwrap_or(0),
+            ) {
+                let command = command.name;
+                self.input.clear();
+                self.completion_index = 0;
+                self.handle_slash_command(command).await;
+                return Ok(());
+            }
+        }
+        if let Err(error) = self.send().await {
+            self.error = Some(error.to_string());
+        }
+        Ok(())
     }
 
     fn toggle_focus(&mut self) {

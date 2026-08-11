@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures_util::stream;
 
-use super::{ChatApp, ChatFocus};
+use super::{ChatApp, ChatFocus, InputMode};
 use crate::{
     agent::ChatAgent,
-    config::AppConfig,
+    config::{AppConfig, BorderStyle},
     memory::Store,
     provider::{
         ChatProvider, ChatRequest, ChatStream, ModelInfo, ProviderCapabilities, Role, StreamEvent,
@@ -55,7 +55,7 @@ async fn slash_completion_and_model_selection_are_persistent() {
     config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
     let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
-    let mut app = ChatApp::new(agent, store, config, config_path.clone(), None).unwrap();
+    let mut app = ChatApp::new(Some(agent), store, config, config_path.clone(), None).unwrap();
 
     app.input = "/pro".into();
     assert!(app.handle_completion_key(KeyCode::Down));
@@ -91,6 +91,126 @@ async fn slash_completion_and_model_selection_are_persistent() {
 }
 
 #[tokio::test]
+async fn enter_executes_the_selected_slash_suggestion() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
+
+    app.input = "/pro".into();
+    app.handle_key(KeyEvent::from(KeyCode::Enter))
+        .await
+        .unwrap();
+
+    assert!(app.error.is_none());
+    assert!(app.input.is_empty());
+    assert!(
+        app.messages
+            .last()
+            .unwrap()
+            .content
+            .contains("可用 Provider")
+    );
+}
+
+#[tokio::test]
+async fn login_command_enters_masked_input_and_escape_cancels() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
+
+    app.execute_slash_command("/login deepseek").await.unwrap();
+    assert!(matches!(
+        app.input_mode,
+        InputMode::Credential { ref provider_id } if provider_id == "deepseek"
+    ));
+    for character in "secret".chars() {
+        app.handle_key(KeyEvent::from(KeyCode::Char(character)))
+            .await
+            .unwrap();
+    }
+    assert_eq!(app.input_mode.display(&app.input), "••••••");
+    assert!(!app.input_mode.display(&app.input).contains("secret"));
+
+    app.handle_key(KeyEvent::from(KeyCode::Esc)).await.unwrap();
+    assert_eq!(app.input_mode, InputMode::Chat);
+    assert!(app.input.is_empty());
+}
+
+#[tokio::test]
+async fn login_is_available_when_starting_without_a_credential() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let config = AppConfig::default();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let mut app = ChatApp::new(None, store, config, config_path, None).unwrap();
+
+    app.input = "/log".into();
+    app.handle_key(KeyEvent::from(KeyCode::Enter))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        app.input_mode,
+        InputMode::Credential { ref provider_id } if provider_id == "deepseek"
+    ));
+}
+#[tokio::test]
+async fn typing_and_enter_queue_a_message_while_streaming() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
+    app.stream = Some(Box::pin(stream::pending::<StreamEvent>()));
+
+    for character in "下一条".chars() {
+        app.handle_key(KeyEvent::from(KeyCode::Char(character)))
+            .await
+            .unwrap();
+    }
+    app.handle_key(KeyEvent::from(KeyCode::Enter))
+        .await
+        .unwrap();
+
+    assert_eq!(app.input, "下一条");
+    assert!(app.pending_send);
+    assert!(app.error.as_deref().unwrap().contains("已排队"));
+}
+
+#[tokio::test]
+async fn appearance_commands_persist_border_and_text_weight() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path.clone(), None).unwrap();
+
+    app.execute_slash_command("/border double").await.unwrap();
+    app.execute_slash_command("/text normal").await.unwrap();
+
+    assert_eq!(app.config.display.border_style, BorderStyle::Double);
+    assert!(!app.config.display.bold_text);
+    let saved = AppConfig::load(&config_path).unwrap();
+    assert_eq!(saved.display.border_style, BorderStyle::Double);
+    assert!(!saved.display.bold_text);
+}
+#[tokio::test]
 async fn t_focuses_history_and_j_k_scroll_without_stealing_text_input() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
@@ -99,7 +219,7 @@ async fn t_focuses_history_and_j_k_scroll_without_stealing_text_input() {
     config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
     let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
-    let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
 
     app.handle_key(KeyEvent::from(KeyCode::Char('t')))
         .await
@@ -146,7 +266,7 @@ async fn clear_starts_with_no_prior_conversation_history() {
     config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
     let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
-    let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
     let previous_session = app.session.id.clone();
     app.store
         .save_message(&previous_session, Role::User, "上一段对话", false)

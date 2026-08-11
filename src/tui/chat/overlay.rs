@@ -55,7 +55,7 @@ pub(super) fn render_slash_suggestions(
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-                .title(" 命令补全 · Tab 确认 · ↑↓选择 ")
+                .title(" 命令候选 · Enter 执行 · Tab 补全 · ↑↓选择 ")
                 .title_style(Style::default().fg(Color::Yellow))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),

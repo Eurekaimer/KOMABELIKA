@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{ChatApp, ModelPicker, validate_agent};
-use crate::{agent::ChatAgent, provider::factory, tui::slash};
+use crate::{agent::ChatAgent, config::BorderStyle, provider::factory, tui::slash};
 
 impl ChatApp {
     pub(super) async fn handle_slash_command(&mut self, command: &str) {
@@ -19,8 +19,8 @@ impl ChatApp {
             "/help" => self.add_system_message(slash::help_text()),
             "/status" => self.add_system_message(format!(
                 "Provider：{}  模型：{}  推理显示：{}",
-                self.agent.provider_id(),
-                self.agent.model(),
+                self.provider_id(),
+                self.model(),
                 if self.show_reasoning { "开" } else { "关" }
             )),
             "/providers" => {
@@ -36,7 +36,7 @@ impl ChatApp {
                 } else {
                     self.add_system_message(format!(
                         "当前 Provider：{}；可用：{}",
-                        self.agent.provider_id(),
+                        self.provider_id(),
                         factory::PROVIDER_IDS.join(", ")
                     ));
                 }
@@ -50,25 +50,83 @@ impl ChatApp {
                     self.open_model_picker().await?;
                 }
             }
+            "/login" => {
+                let provider_id = arguments
+                    .next()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| self.provider_id().to_owned());
+                anyhow::ensure!(arguments.next().is_none(), "用法：/login [provider]");
+                self.begin_credential_entry(&provider_id)?;
+            }
+            "/border" => {
+                if let Some(style) = arguments.next() {
+                    self.config.display.border_style = match style {
+                        "plain" => BorderStyle::Plain,
+                        "rounded" => BorderStyle::Rounded,
+                        "double" => BorderStyle::Double,
+                        "thick" => BorderStyle::Thick,
+                        _ => anyhow::bail!("用法：/border plain|rounded|double|thick"),
+                    };
+                    anyhow::ensure!(
+                        arguments.next().is_none(),
+                        "用法：/border plain|rounded|double|thick"
+                    );
+                    self.config.save(&self.config_path)?;
+                    self.add_system_message("边框样式已保存。");
+                } else {
+                    self.add_system_message(format!(
+                        "当前边框：{}；可用：plain, rounded, double, thick",
+                        self.config.display.border_style.as_str()
+                    ));
+                }
+            }
+            "/text" => {
+                if let Some(weight) = arguments.next() {
+                    self.config.display.bold_text = match weight {
+                        "normal" => false,
+                        "bold" => true,
+                        _ => anyhow::bail!("用法：/text normal|bold"),
+                    };
+                    anyhow::ensure!(arguments.next().is_none(), "用法：/text normal|bold");
+                    self.config.save(&self.config_path)?;
+                    self.add_system_message("绿色正文粗细已保存。");
+                } else {
+                    self.add_system_message(format!(
+                        "当前正文：绿色 {}；可用：normal, bold",
+                        if self.config.display.bold_text {
+                            "bold"
+                        } else {
+                            "normal"
+                        }
+                    ));
+                }
+            }
             "/new" | "/clear" => {
                 anyhow::ensure!(arguments.next().is_none(), "用法：{name}");
                 self.open_session(self.store.create_session()?)?;
             }
             "/reasoning" => {
-                let enabled = match arguments.next() {
-                    Some("on") => true,
-                    Some("off") => false,
-                    _ => anyhow::bail!("用法：/reasoning on|off"),
-                };
-                anyhow::ensure!(arguments.next().is_none(), "用法：/reasoning on|off");
-                self.show_reasoning = enabled;
-                self.config.display.show_reasoning = enabled;
-                self.config.save(&self.config_path)?;
-                self.add_system_message(if enabled {
-                    "已显示推理内容；推理内容不会保存。"
+                if let Some(value) = arguments.next() {
+                    let enabled = match value {
+                        "on" => true,
+                        "off" => false,
+                        _ => anyhow::bail!("用法：/reasoning on|off"),
+                    };
+                    anyhow::ensure!(arguments.next().is_none(), "用法：/reasoning on|off");
+                    self.show_reasoning = enabled;
+                    self.config.display.show_reasoning = enabled;
+                    self.config.save(&self.config_path)?;
+                    self.add_system_message(if enabled {
+                        "已显示推理内容；推理内容不会保存。"
+                    } else {
+                        "已隐藏推理内容。"
+                    });
                 } else {
-                    "已隐藏推理内容。"
-                });
+                    self.add_system_message(format!(
+                        "推理显示：{}；可用：on, off",
+                        if self.show_reasoning { "on" } else { "off" }
+                    ));
+                }
             }
             _ => anyhow::bail!("未知命令“{name}”；输入 /help 查看可用命令"),
         }
@@ -83,8 +141,8 @@ impl ChatApp {
     }
 
     pub(super) async fn open_model_picker(&mut self) -> Result<()> {
-        let mut models = self
-            .agent
+        let agent = self.active_agent()?;
+        let mut models = agent
             .models()
             .await?
             .into_iter()
@@ -95,11 +153,11 @@ impl ChatApp {
         anyhow::ensure!(
             !models.is_empty(),
             "Provider“{}”当前没有可选模型",
-            self.agent.provider_id()
+            agent.provider_id()
         );
         let selected = models
             .iter()
-            .position(|model| model == self.agent.model())
+            .position(|model| model == agent.model())
             .unwrap_or(0);
         self.model_picker = Some(ModelPicker { models, selected });
         self.input.clear();
@@ -140,7 +198,7 @@ impl ChatApp {
         let provider = factory::create(provider_id, &self.config, self.process_api_key.clone())?;
         let agent = ChatAgent::new(provider, model);
         validate_agent(&agent).await?;
-        self.agent = agent;
+        self.agent = Some(agent);
         self.config.chat.provider = provider_id.to_owned();
         self.config.chat.model = model.to_owned();
         self.config.save(&self.config_path)?;
@@ -149,13 +207,18 @@ impl ChatApp {
     }
 
     async fn switch_model(&mut self, model: &str) -> Result<()> {
-        let models = self.agent.models().await?;
+        let agent = self.active_agent()?;
+        let models = agent.models().await?;
         anyhow::ensure!(
             models.iter().any(|candidate| candidate.id == model),
             "模型“{model}”当前不可用；输入 /models 查看模型列表"
         );
-        self.agent.set_model(model);
-        self.config.chat.provider = self.agent.provider_id().to_owned();
+        let provider_id = agent.provider_id().to_owned();
+        self.agent
+            .as_mut()
+            .expect("active agent was checked above")
+            .set_model(model);
+        self.config.chat.provider = provider_id;
         self.config.chat.model = model.to_owned();
         self.config.save(&self.config_path)?;
         self.add_system_message(format!("已切换到模型：{model}。"));

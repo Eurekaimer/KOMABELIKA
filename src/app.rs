@@ -13,6 +13,7 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use ratatui::{Terminal, backend::CrosstermBackend};
+use tokio::time::{Duration, MissedTickBehavior};
 
 use crate::{
     agent::ChatAgent,
@@ -26,16 +27,21 @@ use crate::{
 };
 
 mod commands;
+mod credential_input;
 mod input;
 
+use credential_input::InputMode;
+
 pub async fn run(
-    agent: ChatAgent,
+    agent: Option<ChatAgent>,
     store: Store,
     config: AppConfig,
     config_path: PathBuf,
     process_api_key: Option<String>,
 ) -> Result<()> {
-    validate_agent(&agent).await?;
+    if let Some(agent) = &agent {
+        validate_agent(agent).await?;
+    }
 
     enable_raw_mode()?;
     let mut output = stdout();
@@ -87,7 +93,7 @@ enum ChatFocus {
 }
 
 struct ChatApp {
-    agent: ChatAgent,
+    agent: Option<ChatAgent>,
     store: Store,
     config: AppConfig,
     config_path: PathBuf,
@@ -96,11 +102,13 @@ struct ChatApp {
     messages: Vec<StoredMessage>,
     input: String,
     completion_index: usize,
+    input_mode: InputMode,
     model_picker: Option<ModelPicker>,
     focus: ChatFocus,
     history_scroll: u16,
     stream: Option<ChatStream>,
     cancellation: Option<Arc<AtomicBool>>,
+    pending_send: bool,
     streaming_text: String,
     reasoning_text: String,
     show_reasoning: bool,
@@ -110,7 +118,7 @@ struct ChatApp {
 
 impl ChatApp {
     fn new(
-        agent: ChatAgent,
+        agent: Option<ChatAgent>,
         store: Store,
         config: AppConfig,
         config_path: PathBuf,
@@ -129,11 +137,13 @@ impl ChatApp {
             messages,
             input: String::new(),
             completion_index: 0,
+            input_mode: InputMode::Chat,
             model_picker: None,
             focus: ChatFocus::Input,
             history_scroll: 0,
             stream: None,
             cancellation: None,
+            pending_send: false,
             streaming_text: String::new(),
             reasoning_text: String::new(),
             usage: TokenUsage::default(),
@@ -141,14 +151,41 @@ impl ChatApp {
         })
     }
 
+    fn provider_id(&self) -> &str {
+        self.agent
+            .as_ref()
+            .map_or(&self.config.chat.provider, |agent| agent.provider_id())
+    }
+
+    fn model(&self) -> &str {
+        self.agent
+            .as_ref()
+            .map_or(&self.config.chat.model, ChatAgent::model)
+    }
+
+    fn active_agent(&self) -> Result<&ChatAgent> {
+        self.agent.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "尚未配置 {} API Key；输入 /login 后直接在当前输入框中登录",
+                self.config.chat.provider
+            )
+        })
+    }
+
     async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let mut events = EventStream::new();
+        let mut redraw = tokio::time::interval(Duration::from_millis(33));
+        redraw.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // Consume the interval's immediate first tick; the initial frame is drawn explicitly.
+        redraw.tick().await;
+        self.draw(terminal)?;
+
         loop {
-            self.draw(terminal)?;
             let next = if self.stream.is_some() {
                 tokio::select! {
                     terminal_event = events.next() => LoopEvent::Terminal(terminal_event),
                     stream_event = next_stream_event(&mut self.stream) => LoopEvent::Stream(stream_event),
+                    _ = redraw.tick() => LoopEvent::Redraw,
                 }
             } else {
                 LoopEvent::Terminal(events.next().await)
@@ -161,15 +198,28 @@ impl ChatApp {
                     if !self.handle_key(key).await? {
                         break;
                     }
+                    self.draw(terminal)?;
                 }
-                LoopEvent::Terminal(Some(Ok(_))) => {}
+                LoopEvent::Terminal(Some(Ok(_))) => self.draw(terminal)?,
                 LoopEvent::Terminal(Some(Err(error))) => return Err(error.into()),
                 LoopEvent::Terminal(None) => break,
-                LoopEvent::Stream(Some(event)) => self.handle_stream_event(event)?,
+                LoopEvent::Stream(Some(event)) => {
+                    self.handle_stream_event(event)?;
+                    if self.stream.is_none() {
+                        if self.pending_send && self.error.is_none() {
+                            self.pending_send = false;
+                            self.send().await?;
+                        }
+                        self.draw(terminal)?;
+                    }
+                }
                 LoopEvent::Stream(None) => {
                     self.error = Some("Provider 在完成前关闭了连接".into());
+                    self.pending_send = false;
                     self.finish_generation(true)?;
+                    self.draw(terminal)?;
                 }
+                LoopEvent::Redraw => self.draw(terminal)?,
             }
         }
         if self.stream.is_some() {
@@ -188,19 +238,23 @@ impl ChatApp {
                 interrupted: message.interrupted,
             })
             .collect::<Vec<_>>();
-        let suggestions = slash::suggestions(&self.input);
-        let selected_suggestion = if suggestions.is_empty() {
-            0
+        let displayed_input = self.input_mode.display(&self.input);
+        let suggestions = if self.input_mode.is_credential() {
+            Vec::new()
         } else {
-            self.completion_index % suggestions.len()
+            slash::suggestions(&self.input)
         };
+        let selected_suggestion = self
+            .completion_index
+            .checked_rem(suggestions.len())
+            .unwrap_or(0);
         terminal.draw(|frame| {
             chat::render(
                 frame,
                 ChatView {
                     session_name: &self.session.title,
-                    provider: self.agent.provider_id(),
-                    model: self.agent.model(),
+                    provider: self.provider_id(),
+                    model: self.model(),
                     generating: self.stream.is_some(),
                     input_tokens: self.usage.input_tokens,
                     output_tokens: self.usage.output_tokens,
@@ -208,7 +262,12 @@ impl ChatApp {
                     messages: &messages,
                     streaming_text: &self.streaming_text,
                     reasoning_text: &self.reasoning_text,
-                    input: &self.input,
+                    input: &displayed_input,
+                    input_title: self.input_mode.title(),
+                    credential_entry: self.input_mode.is_credential(),
+                    message_queued: self.pending_send,
+                    bold_text: self.config.display.bold_text,
+                    border_style: self.config.display.border_style,
                     slash_suggestions: &suggestions,
                     selected_suggestion,
                     history_focused: self.focus == ChatFocus::History,
@@ -231,11 +290,16 @@ impl ChatApp {
         if self.stream.is_some() || self.input.trim().is_empty() {
             return Ok(());
         }
+        self.pending_send = false;
         self.error = None;
         self.focus = ChatFocus::Input;
         self.history_scroll = 0;
+        let is_command = self.input.trim_start().starts_with('/');
+        if !is_command {
+            self.active_agent()?;
+        }
         let input = std::mem::take(&mut self.input);
-        if input.trim_start().starts_with('/') {
+        if is_command {
             self.handle_slash_command(input.trim()).await;
             return Ok(());
         }
@@ -251,7 +315,11 @@ impl ChatApp {
         });
         let history = self.store.history(&self.session.id)?;
         let cancellation = Arc::new(AtomicBool::new(false));
-        self.stream = Some(self.agent.reply(&history, cancellation.clone()).await?);
+        let stream = self
+            .active_agent()?
+            .reply(&history, cancellation.clone())
+            .await?;
+        self.stream = Some(stream);
         self.cancellation = Some(cancellation);
         self.streaming_text.clear();
         self.reasoning_text.clear();
@@ -343,6 +411,7 @@ impl ChatApp {
 enum LoopEvent {
     Terminal(Option<Result<Event, io::Error>>),
     Stream(Option<StreamEvent>),
+    Redraw,
 }
 
 async fn next_stream_event(stream: &mut Option<ChatStream>) -> Option<StreamEvent> {

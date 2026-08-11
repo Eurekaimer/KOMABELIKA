@@ -35,10 +35,38 @@ pub struct MemoryConfig {
     pub max_retrieved: usize,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DisplayConfig {
     pub show_reasoning: bool,
+    pub bold_text: bool,
+    pub border_style: BorderStyle,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BorderStyle {
+    Plain,
+    Rounded,
+    Double,
+    Thick,
+}
+
+impl Default for BorderStyle {
+    fn default() -> Self {
+        Self::Thick
+    }
+}
+
+impl BorderStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Rounded => "rounded",
+            Self::Double => "double",
+            Self::Thick => "thick",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -89,6 +117,15 @@ impl Default for PersonaConfig {
         Self {
             profile: "komari".into(),
             language: "zh-CN".into(),
+        }
+    }
+}
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            show_reasoning: false,
+            bold_text: true,
+            border_style: BorderStyle::Thick,
         }
     }
 }
@@ -190,6 +227,8 @@ mod tests {
         assert_eq!(config.providers.opencode_go.api_key_env, "OPENCODE_API_KEY");
         assert_eq!(config.providers.opencode_go.timeout_seconds, 120);
         assert_eq!(config.providers.opencode_go.max_tokens, None);
+        assert!(config.display.bold_text);
+        assert_eq!(config.display.border_style, BorderStyle::Thick);
     }
 
     #[test]
@@ -205,6 +244,8 @@ mod tests {
         assert!(!loaded.memory.enabled);
         assert_eq!(loaded.logging.level, "info");
         assert!(!path.with_extension("toml.tmp").exists());
+        assert!(loaded.display.bold_text);
+        assert_eq!(loaded.display.border_style, BorderStyle::Thick);
         assert!(loaded.providers.opencode_go.enabled);
         assert_eq!(
             loaded.providers.opencode_go.base_url,
