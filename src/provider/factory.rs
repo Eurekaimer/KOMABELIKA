@@ -2,20 +2,23 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 
-use crate::{config::AppConfig, credentials::resolve_deepseek};
+use crate::{
+    config::AppConfig,
+    credentials::{resolve_deepseek, resolve_opencode_go},
+};
 
 use super::{
     ChatProvider,
     deepseek::{DeepSeekProvider, DeepSeekSettings},
-    mock::MockProvider,
+    opencode_go::{OpenCodeGoProvider, OpenCodeGoSettings},
 };
 
-pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "mock"];
+pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "opencode-go"];
 
 pub fn default_model(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "deepseek" => Some("deepseek-v4-flash"),
-        "mock" => Some("komari-mock"),
+        "opencode-go" => Some("deepseek-v4-flash"),
         _ => None,
     }
 }
@@ -26,8 +29,8 @@ pub fn create(
     process_api_key: Option<String>,
 ) -> Result<Arc<dyn ChatProvider>> {
     match provider_id {
-        "mock" => Ok(Arc::new(MockProvider::default())),
         "deepseek" => create_deepseek(config, process_api_key),
+        "opencode-go" => create_opencode_go(config, process_api_key),
         unknown => anyhow::bail!("unknown provider '{unknown}'"),
     }
 }
@@ -46,6 +49,26 @@ fn create_deepseek(
             base_url: settings.base_url.clone(),
             timeout: Duration::from_secs(settings.timeout_seconds),
             thinking: settings.thinking,
+            max_tokens: settings.max_tokens,
+        },
+        credential.expose().to_owned(),
+    )?;
+    Ok(Arc::new(provider))
+}
+
+fn create_opencode_go(
+    config: &AppConfig,
+    process_api_key: Option<String>,
+) -> Result<Arc<dyn ChatProvider>> {
+    let settings = &config.providers.opencode_go;
+    anyhow::ensure!(settings.enabled, "OpenCode Go is disabled in configuration");
+    let credential = resolve_opencode_go(process_api_key, &settings.api_key_env).context(
+        "no OpenCode Go API key found; run komari-call login opencode-go or set OPENCODE_API_KEY",
+    )?;
+    let provider = OpenCodeGoProvider::new(
+        OpenCodeGoSettings {
+            base_url: settings.base_url.clone(),
+            timeout: Duration::from_secs(settings.timeout_seconds),
             max_tokens: settings.max_tokens,
         },
         credential.expose().to_owned(),

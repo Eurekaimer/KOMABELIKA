@@ -27,6 +27,18 @@ pub fn run(config: &mut AppConfig, path: &Path, args: ConfigArgs) -> Result<()> 
     if let Some(max_tokens) = args.deepseek_max_tokens {
         config.providers.deepseek.max_tokens = (max_tokens != 0).then_some(max_tokens);
     }
+    if let Some(base_url) = args.opencode_go_base_url {
+        config.providers.opencode_go.base_url = base_url;
+    }
+    if let Some(environment) = args.opencode_go_api_key_env {
+        config.providers.opencode_go.api_key_env = environment;
+    }
+    if let Some(timeout) = args.opencode_go_timeout {
+        config.providers.opencode_go.timeout_seconds = timeout;
+    }
+    if let Some(max_tokens) = args.opencode_go_max_tokens {
+        config.providers.opencode_go.max_tokens = (max_tokens != 0).then_some(max_tokens);
+    }
     if let Some(enabled) = args.memory {
         config.memory.enabled = enabled;
     }

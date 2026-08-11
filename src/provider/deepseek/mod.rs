@@ -1,19 +1,19 @@
 mod error;
-mod protocol;
-mod sse;
-mod stream;
 
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use error::{classify_response, transport};
 use reqwest::header::ACCEPT;
 
-use crate::provider::{ChatProvider, ChatRequest, ChatStream, ModelInfo, ProviderCapabilities};
-
-use error::{classify_response, transport};
-use protocol::{CompletionRequest, ModelsResponse, StreamOptions, Thinking};
-use stream::into_chat_stream;
+use crate::provider::{
+    ChatProvider, ChatRequest, ChatStream, ModelInfo, ProviderCapabilities,
+    openai_compatible::{
+        into_chat_stream,
+        protocol::{CompletionRequest, ModelsResponse, StreamOptions, Thinking},
+    },
+};
 
 pub struct DeepSeekSettings {
     pub base_url: String,
@@ -135,7 +135,7 @@ impl ChatProvider for DeepSeekProvider {
         if !response.status().is_success() {
             return Err(classify_response(response, &self.api_key).await.into());
         }
-        Ok(into_chat_stream(response, request.cancelled))
+        Ok(into_chat_stream(response, request.cancelled, "DeepSeek"))
     }
 
     async fn health_check(&self) -> Result<()> {

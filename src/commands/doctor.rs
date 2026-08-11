@@ -18,6 +18,10 @@ pub async fn run(config: &AppConfig, config_path: &Path, data_dir: &Path) -> Res
         Some(credential) => println!("[ok] DeepSeek credential: {}", credential.source),
         None => println!("[--] DeepSeek credential: not configured"),
     }
+    match credentials::resolve_opencode_go(None, &config.providers.opencode_go.api_key_env) {
+        Some(credential) => println!("[ok] OpenCode Go credential: {}", credential.source),
+        None => println!("[--] OpenCode Go credential: not configured"),
+    }
 
     let provider = factory::create(&config.chat.provider, config, None)?;
     provider.health_check().await?;

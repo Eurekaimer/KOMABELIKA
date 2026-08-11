@@ -14,8 +14,8 @@ impl SseDecoder {
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            let line = String::from_utf8(line)
-                .map_err(|_| "DeepSeek returned a non-UTF-8 SSE line".to_owned())?;
+            let line =
+                String::from_utf8(line).map_err(|_| "returned a non-UTF-8 SSE line".to_owned())?;
             self.accept_line(&line, &mut events);
         }
         Ok(events)
@@ -25,7 +25,7 @@ impl SseDecoder {
         let mut events = Vec::new();
         if !self.buffer.is_empty() {
             let line = String::from_utf8(std::mem::take(&mut self.buffer))
-                .map_err(|_| "DeepSeek returned a non-UTF-8 SSE line".to_owned())?;
+                .map_err(|_| "returned a non-UTF-8 SSE line".to_owned())?;
             self.accept_line(line.trim_end_matches('\r'), &mut events);
         }
         self.flush_event(&mut events);

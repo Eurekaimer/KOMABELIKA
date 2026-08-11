@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::telemetry::redact_secrets;
 
-use super::protocol::ErrorEnvelope;
+use crate::provider::openai_compatible::protocol::ErrorEnvelope;
 
 #[derive(Debug, Error)]
 pub enum DeepSeekError {
@@ -23,8 +23,6 @@ pub enum DeepSeekError {
     Http { status: u16, message: String },
     #[error("DeepSeek transport error: {0}")]
     Transport(String),
-    #[error("DeepSeek stream protocol error: {0}")]
-    Protocol(String),
 }
 
 pub async fn classify_response(response: Response, api_key: &str) -> DeepSeekError {

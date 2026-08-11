@@ -4,15 +4,15 @@ use clap::{Args, ValueEnum};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ProviderId {
-    Mock,
     Deepseek,
+    OpencodeGo,
 }
 
 impl fmt::Display for ProviderId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Mock => "mock",
             Self::Deepseek => "deepseek",
+            Self::OpencodeGo => "opencode-go",
         })
     }
 }
@@ -20,6 +20,7 @@ impl fmt::Display for ProviderId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CredentialProvider {
     Deepseek,
+    OpencodeGo,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -38,7 +39,7 @@ pub struct ChatArgs {
     #[arg(long)]
     pub model: Option<String>,
 
-    /// DeepSeek key for this process only (prefer `login deepseek`)
+    /// Selected provider key for this process only
     #[arg(long)]
     pub api_key: Option<String>,
 }
@@ -49,7 +50,7 @@ pub struct ModelsArgs {
     #[arg(long)]
     pub provider: Option<ProviderId>,
 
-    /// DeepSeek key for this process only
+    /// Selected provider key for this process only
     #[arg(long)]
     pub api_key: Option<String>,
 }
@@ -84,6 +85,22 @@ pub struct ConfigArgs {
     #[arg(long)]
     pub deepseek_max_tokens: Option<u32>,
 
+    /// Set the OpenCode Go API base URL
+    #[arg(long)]
+    pub opencode_go_base_url: Option<String>,
+
+    /// Set the fallback environment-variable name for the OpenCode Go key
+    #[arg(long)]
+    pub opencode_go_api_key_env: Option<String>,
+
+    /// Set the OpenCode Go request timeout in seconds
+    #[arg(long, value_parser = parse_timeout)]
+    pub opencode_go_timeout: Option<u64>,
+
+    /// Set or clear the OpenCode Go output limit (0 clears it)
+    #[arg(long)]
+    pub opencode_go_max_tokens: Option<u32>,
+
     /// Enable or disable memory configuration
     #[arg(long, value_parser = clap::value_parser!(bool))]
     pub memory: Option<bool>,
@@ -110,6 +127,10 @@ impl ConfigArgs {
             || self.deepseek_timeout.is_some()
             || self.deepseek_thinking.is_some()
             || self.deepseek_max_tokens.is_some()
+            || self.opencode_go_base_url.is_some()
+            || self.opencode_go_api_key_env.is_some()
+            || self.opencode_go_timeout.is_some()
+            || self.opencode_go_max_tokens.is_some()
             || self.memory.is_some()
             || self.max_retrieved.is_some()
             || self.show_reasoning.is_some()

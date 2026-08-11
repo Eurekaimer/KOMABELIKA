@@ -1,6 +1,7 @@
 pub mod deepseek;
 pub mod factory;
-pub mod mock;
+mod openai_compatible;
+pub mod opencode_go;
 
 use std::{pin::Pin, sync::Arc};
 

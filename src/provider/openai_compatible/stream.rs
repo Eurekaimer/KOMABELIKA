@@ -8,11 +8,15 @@ use tokio::sync::mpsc;
 
 use crate::provider::{ChatStream, StreamEvent, TokenUsage};
 
-use super::{error::DeepSeekError, protocol::CompletionChunk, sse::SseDecoder};
+use super::{protocol::CompletionChunk, sse::SseDecoder};
 
-pub fn into_chat_stream(response: reqwest::Response, cancelled: Arc<AtomicBool>) -> ChatStream {
+pub(crate) fn into_chat_stream(
+    response: reqwest::Response,
+    cancelled: Arc<AtomicBool>,
+    provider_name: &'static str,
+) -> ChatStream {
     let (sender, receiver) = mpsc::channel(64);
-    tokio::spawn(pump(response, cancelled, sender));
+    tokio::spawn(pump(response, cancelled, sender, provider_name));
     Box::pin(stream::unfold(receiver, |mut receiver| async move {
         receiver.recv().await.map(|event| (event, receiver))
     }))
@@ -22,10 +26,10 @@ async fn pump(
     response: reqwest::Response,
     cancelled: Arc<AtomicBool>,
     sender: mpsc::Sender<StreamEvent>,
+    provider_name: &'static str,
 ) {
     let mut bytes = response.bytes_stream();
     let mut decoder = SseDecoder::default();
-    let mut completed = false;
 
     while let Some(chunk) = bytes.next().await {
         if cancelled.load(Ordering::Relaxed) {
@@ -37,7 +41,7 @@ async fn pump(
             Err(error) => {
                 send(
                     &sender,
-                    StreamEvent::Failed(DeepSeekError::Transport(error.to_string()).to_string()),
+                    StreamEvent::Failed(format!("{provider_name} transport error: {error}")),
                 )
                 .await;
                 return;
@@ -48,38 +52,47 @@ async fn pump(
             Err(error) => {
                 send(
                     &sender,
-                    StreamEvent::Failed(DeepSeekError::Protocol(error).to_string()),
+                    StreamEvent::Failed(format!("{provider_name} stream protocol error: {error}")),
                 )
                 .await;
                 return;
             }
         };
         for payload in payloads {
-            if dispatch_payload(&sender, &payload).await {
-                completed = true;
-                break;
-            }
-        }
-        if completed {
-            return;
-        }
-    }
-
-    if let Ok(payloads) = decoder.finish() {
-        for payload in payloads {
-            if dispatch_payload(&sender, &payload).await {
+            if dispatch_payload(&sender, &payload, provider_name).await {
                 return;
             }
         }
     }
+
+    let payloads = match decoder.finish() {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            send(
+                &sender,
+                StreamEvent::Failed(format!("{provider_name} stream protocol error: {error}")),
+            )
+            .await;
+            return;
+        }
+    };
+    for payload in payloads {
+        if dispatch_payload(&sender, &payload, provider_name).await {
+            return;
+        }
+    }
     send(
         &sender,
-        StreamEvent::Failed("DeepSeek closed the stream before [DONE]".into()),
+        StreamEvent::Failed(format!("{provider_name} closed the stream before [DONE]")),
     )
     .await;
 }
 
-async fn dispatch_payload(sender: &mpsc::Sender<StreamEvent>, payload: &str) -> bool {
+async fn dispatch_payload(
+    sender: &mpsc::Sender<StreamEvent>,
+    payload: &str,
+    provider_name: &'static str,
+) -> bool {
     if payload == "[DONE]" {
         send(sender, StreamEvent::Completed).await;
         return true;
@@ -89,9 +102,9 @@ async fn dispatch_payload(sender: &mpsc::Sender<StreamEvent>, payload: &str) -> 
         Err(error) => {
             send(
                 sender,
-                StreamEvent::Failed(
-                    DeepSeekError::Protocol(format!("invalid JSON chunk: {error}")).to_string(),
-                ),
+                StreamEvent::Failed(format!(
+                    "{provider_name} stream protocol error: invalid JSON chunk: {error}"
+                )),
             )
             .await;
             return true;
@@ -134,8 +147,8 @@ mod tests {
     async fn dispatches_reasoning_text_usage_and_completion() {
         let (sender, mut receiver) = mpsc::channel(8);
         let payload = r#"{"choices":[{"delta":{"reasoning_content":"think","content":"answer"}}],"usage":{"prompt_tokens":7,"completion_tokens":3}}"#;
-        assert!(!dispatch_payload(&sender, payload).await);
-        assert!(dispatch_payload(&sender, "[DONE]").await);
+        assert!(!dispatch_payload(&sender, payload, "DeepSeek").await);
+        assert!(dispatch_payload(&sender, "[DONE]", "DeepSeek").await);
 
         assert_eq!(
             receiver.recv().await,

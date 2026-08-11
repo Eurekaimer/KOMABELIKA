@@ -67,6 +67,34 @@ mod tests {
         assert_eq!(args.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(args.deepseek_thinking, Some(false));
         assert!(args.has_changes());
+
+        let cli = Cli::try_parse_from([
+            "komari-call",
+            "config",
+            "--provider",
+            "opencode-go",
+            "--opencode-go-base-url",
+            "https://example.com/go/v1",
+            "--opencode-go-api-key-env",
+            "GO_KEY",
+            "--opencode-go-timeout",
+            "90",
+            "--opencode-go-max-tokens",
+            "2048",
+        ])
+        .unwrap();
+        let Some(Command::Config(args)) = cli.command else {
+            panic!("expected config command");
+        };
+        assert_eq!(args.provider, Some(ProviderId::OpencodeGo));
+        assert_eq!(
+            args.opencode_go_base_url.as_deref(),
+            Some("https://example.com/go/v1")
+        );
+        assert_eq!(args.opencode_go_api_key_env.as_deref(), Some("GO_KEY"));
+        assert_eq!(args.opencode_go_timeout, Some(90));
+        assert_eq!(args.opencode_go_max_tokens, Some(2048));
+        assert!(args.has_changes());
     }
 
     #[test]
@@ -85,5 +113,21 @@ mod tests {
                 .command,
             Some(Command::Models(_))
         ));
+
+        assert!(matches!(
+            Cli::try_parse_from(["komari-call", "login", "opencode-go"])
+                .unwrap()
+                .command,
+            Some(Command::Login(CredentialArgs {
+                provider: CredentialProvider::OpencodeGo
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["komari-call", "models", "--provider", "opencode-go"])
+                .unwrap()
+                .command,
+            Some(Command::Models(_))
+        ));
+        assert!(Cli::try_parse_from(["komari-call", "chat", "--provider", "mock"]).is_err());
     }
 }

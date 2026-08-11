@@ -13,6 +13,12 @@ pub fn login(args: CredentialArgs) -> Result<()> {
             println!("DeepSeek API key saved in the system keyring.");
             Ok(())
         }
+        CredentialProvider::OpencodeGo => {
+            let key = rpassword::prompt_password("OpenCode Go API key: ")?;
+            credentials::store_opencode_go(key.trim())?;
+            println!("OpenCode Go API key saved in the system keyring.");
+            Ok(())
+        }
     }
 }
 
@@ -23,6 +29,14 @@ pub fn logout(args: CredentialArgs) -> Result<()> {
                 println!("DeepSeek API key removed from the system keyring.");
             } else {
                 println!("No DeepSeek API key was stored in the system keyring.");
+            }
+            Ok(())
+        }
+        CredentialProvider::OpencodeGo => {
+            if credentials::delete_opencode_go()? {
+                println!("OpenCode Go API key removed from the system keyring.");
+            } else {
+                println!("No OpenCode Go API key was stored in the system keyring.");
             }
             Ok(())
         }

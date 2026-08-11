@@ -1,24 +1,60 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use futures_util::stream;
 
 use super::{ChatApp, ChatFocus};
 use crate::{
     agent::ChatAgent,
     config::AppConfig,
     memory::Store,
-    provider::{Role, mock::MockProvider},
+    provider::{
+        ChatProvider, ChatRequest, ChatStream, ModelInfo, ProviderCapabilities, Role, StreamEvent,
+    },
 };
+
+#[derive(Clone, Debug)]
+struct TestProvider;
+
+#[async_trait]
+impl ChatProvider for TestProvider {
+    fn id(&self) -> &'static str {
+        "test"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            reasoning: true,
+        }
+    }
+
+    async fn list_models(&self) -> anyhow::Result<Vec<ModelInfo>> {
+        Ok(vec![ModelInfo {
+            id: "test-model".into(),
+            display_name: "test-model".into(),
+        }])
+    }
+
+    async fn stream_chat(&self, _request: ChatRequest) -> anyhow::Result<ChatStream> {
+        Ok(Box::pin(stream::iter([StreamEvent::Completed])))
+    }
+
+    async fn health_check(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn slash_completion_and_model_selection_are_persistent() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
     let mut config = AppConfig::default();
-    config.chat.provider = "mock".into();
-    config.chat.model = "komari-mock".into();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
-    let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
     let mut app = ChatApp::new(agent, store, config, config_path.clone(), None).unwrap();
 
     app.input = "/pro".into();
@@ -28,7 +64,7 @@ async fn slash_completion_and_model_selection_are_persistent() {
     app.input.clear();
 
     app.open_model_picker().await.unwrap();
-    assert_eq!(app.model_picker.as_ref().unwrap().models, ["komari-mock"]);
+    assert_eq!(app.model_picker.as_ref().unwrap().models, ["test-model"]);
     app.model_picker
         .as_mut()
         .unwrap()
@@ -48,8 +84,8 @@ async fn slash_completion_and_model_selection_are_persistent() {
     assert!(app.model_picker.is_none());
 
     let saved = AppConfig::load(&config_path).unwrap();
-    assert_eq!(saved.chat.provider, "mock");
-    assert_eq!(saved.chat.model, "komari-mock");
+    assert_eq!(saved.chat.provider, "test");
+    assert_eq!(saved.chat.model, "test-model");
     assert_eq!(app.messages.last().unwrap().role, Role::System);
     assert!(app.store.history(&app.session.id).unwrap().is_empty());
 }
@@ -59,10 +95,10 @@ async fn t_focuses_history_and_j_k_scroll_without_stealing_text_input() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
     let mut config = AppConfig::default();
-    config.chat.provider = "mock".into();
-    config.chat.model = "komari-mock".into();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
-    let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
     let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
 
     app.handle_key(KeyEvent::from(KeyCode::Char('t')))
@@ -106,10 +142,10 @@ async fn clear_starts_with_no_prior_conversation_history() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
     let mut config = AppConfig::default();
-    config.chat.provider = "mock".into();
-    config.chat.model = "komari-mock".into();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
     let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
-    let agent = ChatAgent::new(Arc::new(MockProvider::immediate()), "komari-mock");
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
     let mut app = ChatApp::new(agent, store, config, config_path, None).unwrap();
     let previous_session = app.session.id.clone();
     app.store

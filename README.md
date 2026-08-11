@@ -10,14 +10,14 @@
 ## 现在能做什么
 
 - 在终端 TUI 中进行流式聊天；
-- 使用 DeepSeek 官方 API，也内置了方便开发和测试的 Mock Provider；
+- 使用 DeepSeek 官方 API 或 OpenCode Go 套餐进行流式聊天；
 - 保存、恢复、新建和切换本地会话；
 - 浏览较早的聊天记录，并在输入区和历史区之间切换；
 - 取消正在生成的回复，查看简单的 Token 用量；
 - 从结构化 YAML 加载小鞠的性格、人物关系和对话习惯；
 - 通过 TOML 保存设置，通过 SQLite 保存聊天记录。
 
-目前还没有实现长期记忆、Codex、OpenCode Zen 和配置 TUI。这些模块会在基础聊天体验稳定后继续补上。
+OpenCode Zen 尚未实现；OpenCode Go 使用独立的 Go 套餐接口。
 
 ## 安装与运行
 
@@ -41,14 +41,31 @@ cd KOMABELIKA
 cargo run --release
 ```
 
-第一次使用 DeepSeek 时，把自己的 Key 存进系统 Keyring，然后直接启动聊天：
+第一次使用时，可以把所选 Provider 的 Key 存进系统 Keyring。DeepSeek：
 
 ```bash
 komari-call login deepseek
+komari-call models --provider deepseek
 komari-call
 ```
 
-也支持 `DEEPSEEK_API_KEY` 环境变量和 `chat --api-key` 临时参数。模型不合适时可以运行 `komari-call models --provider deepseek` 查看当前账户可用的模型，再通过 `komari-call config --model <模型 ID>` 切换。
+OpenCode Go 的 Key 需要先在 <https://opencode.ai/auth> 订阅 Go 后复制，然后运行：
+
+```bash
+komari-call login opencode-go
+komari-call config --provider opencode-go --model deepseek-v4-flash
+komari-call models --provider opencode-go
+komari-call
+```
+
+也可以使用环境变量，或用 `chat --api-key` / `models --api-key` 只为当前进程提供所选 Provider 的 Key：
+
+```bash
+export DEEPSEEK_API_KEY='<DeepSeek Key>'
+export OPENCODE_API_KEY='<OpenCode Go Key>'
+```
+
+OpenCode Go 的模型选择器目前只显示官方使用 OpenAI-compatible `/chat/completions` 的模型。MiniMax 和 Qwen 需要 Anthropic `/messages`，GPT 5.6 Luna 需要 OpenAI `/responses`；这些协议尚未在本项目中实现，因此不会出现在可选模型中。
 
 ## 聊天界面
 
@@ -101,7 +118,7 @@ CLI
      │   ├─ Persona context
      │   └─ ChatProvider
      │       ├─ DeepSeek Provider
-     │       └─ Mock Provider
+     │       └─ OpenCode Go Provider
      ├─ SQLite session store
      └─ TOML config + system Keyring
 ```

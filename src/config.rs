@@ -51,6 +51,7 @@ pub struct LoggingConfig {
 #[serde(default)]
 pub struct ProvidersConfig {
     pub deepseek: DeepSeekConfig,
+    pub opencode_go: OpenCodeGoConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,6 +62,16 @@ pub struct DeepSeekConfig {
     pub api_key_env: String,
     pub timeout_seconds: u64,
     pub thinking: bool,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OpenCodeGoConfig {
+    pub enabled: bool,
+    pub base_url: String,
+    pub api_key_env: String,
+    pub timeout_seconds: u64,
     pub max_tokens: Option<u32>,
 }
 
@@ -107,6 +118,18 @@ impl Default for DeepSeekConfig {
             api_key_env: "DEEPSEEK_API_KEY".into(),
             timeout_seconds: 120,
             thinking: false,
+            max_tokens: None,
+        }
+    }
+}
+
+impl Default for OpenCodeGoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            base_url: "https://opencode.ai/zen/go/v1".into(),
+            api_key_env: "OPENCODE_API_KEY".into(),
+            timeout_seconds: 120,
             max_tokens: None,
         }
     }
@@ -159,6 +182,14 @@ mod tests {
         assert_eq!(config.chat.model, "deepseek-v4-flash");
         assert!(!config.memory.enabled);
         assert_eq!(config.memory.max_retrieved, 5);
+        assert!(config.providers.opencode_go.enabled);
+        assert_eq!(
+            config.providers.opencode_go.base_url,
+            "https://opencode.ai/zen/go/v1"
+        );
+        assert_eq!(config.providers.opencode_go.api_key_env, "OPENCODE_API_KEY");
+        assert_eq!(config.providers.opencode_go.timeout_seconds, 120);
+        assert_eq!(config.providers.opencode_go.max_tokens, None);
     }
 
     #[test]
@@ -174,5 +205,16 @@ mod tests {
         assert!(!loaded.memory.enabled);
         assert_eq!(loaded.logging.level, "info");
         assert!(!path.with_extension("toml.tmp").exists());
+        assert!(loaded.providers.opencode_go.enabled);
+        assert_eq!(
+            loaded.providers.opencode_go.base_url,
+            "https://opencode.ai/zen/go/v1"
+        );
+        let formatted = loaded.formatted().unwrap();
+        let reparsed: AppConfig = toml::from_str(&formatted).unwrap();
+        assert_eq!(
+            reparsed.providers.opencode_go.api_key_env,
+            "OPENCODE_API_KEY"
+        );
     }
 }
