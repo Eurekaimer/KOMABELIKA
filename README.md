@@ -1,23 +1,23 @@
 # Komari Call
 
-一个住在终端里的小鞠知花风格聊天程序。打开终端，运行 `komari-call`，然后和她聊一会儿。
+一个住在终端里的小鞠知花风格聊天程序。感到累的时候就打开终端，运行 `komari-call`，然后和她聊一会儿天吧。
 
-> 小鞠不需要替我工作。 <del>写代码、修 Linux、整理项目和管理日程，已经有太多 Agent 抢着做了。</del>
+> 小鞠不需要替我工作。 <del>写代码、修系统、整理项目和管理日程，让其他 Agent 做去吧。</del>
 > 她只需要陪我聊天就可以了。
 
-![Komari Call 终端聊天界面](img/showlove.png)
+![Komari Call 终端聊天界面](img/lovely-komari.png)
 
 ## 现在能做什么
 
 - 在终端 TUI 中进行流式聊天；
-- 使用 DeepSeek 官方 API 或 OpenCode Go 套餐进行流式聊天；
+- 使用 DeepSeek 官方 API 或 OpenCode Go 的 API 进行流式聊天；
 - 保存、恢复、新建和切换本地会话；
 - 浏览较早的聊天记录，并在输入区和历史区之间切换；
 - 取消正在生成的回复，查看简单的 Token 用量；
 - 从结构化 YAML 加载小鞠的性格、人物关系和对话习惯；
 - 通过 TOML 保存设置，通过 SQLite 保存聊天记录。
 
-OpenCode Zen 尚未实现；OpenCode Go 使用独立的 Go 套餐接口。
+> OpenCode Zen 尚未实现（太贵了感觉不会买所以不想实现，如果有人想扩展接口请自己 fork 然后自己改吧，不接受 PR）；OpenCode Go 使用独立的 Go 套餐接口。
 
 ## 安装与运行
 
