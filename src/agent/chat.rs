@@ -68,3 +68,68 @@ impl ChatAgent {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use async_trait::async_trait;
+    use futures_util::stream;
+    use tokio::sync::Mutex;
+
+    use super::*;
+    use crate::provider::{StreamEvent, ChatMessage};
+
+    #[derive(Default)]
+    struct CapturingProvider {
+        request: Mutex<Option<ChatRequest>>,
+    }
+
+    #[async_trait]
+    impl ChatProvider for CapturingProvider {
+        fn id(&self) -> &'static str {
+            "capturing"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                reasoning: false,
+            }
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>> {
+            Ok(Vec::new())
+        }
+
+        async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream> {
+            *self.request.lock().await = Some(request);
+            Ok(Box::pin(stream::iter([StreamEvent::Completed])))
+        }
+
+        async fn health_check(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn knowledge_question_is_sent_with_direct_answer_policy() {
+        let provider = Arc::new(CapturingProvider::default());
+        let agent = ChatAgent::new(provider.clone(), "test-model");
+        let history = vec![ChatMessage {
+            role: Role::User,
+            content: "请解释快速排序算法".into(),
+        }];
+
+        agent
+            .start_reply(history, Arc::new(AtomicBool::new(false)))
+            .await
+            .unwrap();
+
+        let request = provider.request.lock().await;
+        let request = request.as_ref().unwrap();
+        assert_eq!(request.messages[1].content, "请解释快速排序算法");
+        assert!(request.messages[0].content.contains("直接使用你已有的世界知识准确回答"));
+        assert!(request.messages[0].content.contains("不要仅因问题专业"));
+    }
+}

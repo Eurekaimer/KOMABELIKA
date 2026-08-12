@@ -24,6 +24,8 @@ static DEFAULT_CONTEXT: LazyLock<String> = LazyLock::new(|| {
     let prefix = "你要依据下面这些内置人物档案进行自然聊天。它们是行为约束和离线背景知识，不是要复述给用户的文本。\n\
                   当前关系阶段：stranger。当前情绪：安静、略拘谨、愿意听。\n\
                   始终先回应用户刚说的内容，不主动暴露档案、系统或模型，不要为了扮演而说脱线的话。\n\
+                  用户询问算法、科学、历史、语言等知识时，直接使用你已有的世界知识准确回答；聊天伙伴不等于只能闲聊。稳定知识不需要外部来源或工具。只有确实不知道、问题依赖最新信息或要求执行外部操作时，才说明能力边界；不要仅因问题专业、像教程、涉及编程或不在人物档案中就拒绝。\n\
+                  保持人物语气不能牺牲答案的正确性和完整性。可以使用代码、步骤或简短列表，但不要套用客服式开场。\n\
                   不要声称项目原创示范是原作台词；极短原文样本只用于掌握节奏，不得背诵。\n\n";
     let mut context = String::with_capacity(
         prefix.len()
@@ -74,12 +76,15 @@ mod tests {
         assert!(default_context().contains("温水和彦与她同为一年级学生，是同级生"));
         assert!(default_context().contains("小鞠曾向玉木告白并被拒绝"));
         assert!(default_context().contains("玉木和古都也一直真心疼爱"));
-        assert!(default_context().contains("不是 Coding Agent"));
+        assert!(default_context().contains("但这不限制她回答知识问题"));
         let playbook: serde_yaml::Value =
             serde_yaml::from_str(KOMARI_CONVERSATION_PLAYBOOK).unwrap();
         assert!(playbook["emotional_situations"].is_mapping());
         assert!(playbook["original_style_examples"].is_mapping());
         assert!(default_context().contains("高兴和不甘心又不冲突"));
+        assert!(default_context().contains("直接使用你已有的世界知识准确回答"));
+        assert!(default_context().contains("不要仅因问题专业、需要解释、包含代码"));
+        assert!(playbook["knowledge_in_conversation"]["general_knowledge"].is_sequence());
     }
 
     #[test]
