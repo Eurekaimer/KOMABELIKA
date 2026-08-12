@@ -43,19 +43,14 @@ pub struct DisplayConfig {
     pub border_style: BorderStyle,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BorderStyle {
     Plain,
     Rounded,
     Double,
+    #[default]
     Thick,
-}
-
-impl Default for BorderStyle {
-    fn default() -> Self {
-        Self::Thick
-    }
 }
 
 impl BorderStyle {

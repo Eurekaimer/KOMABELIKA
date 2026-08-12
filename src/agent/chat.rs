@@ -78,7 +78,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::provider::{StreamEvent, ChatMessage};
+    use crate::provider::{ChatMessage, StreamEvent};
 
     #[derive(Default)]
     struct CapturingProvider {
@@ -121,7 +121,7 @@ mod tests {
             content: "请解释快速排序算法".into(),
         }];
 
-        agent
+        let _stream = agent
             .start_reply(history, Arc::new(AtomicBool::new(false)))
             .await
             .unwrap();
@@ -129,7 +129,11 @@ mod tests {
         let request = provider.request.lock().await;
         let request = request.as_ref().unwrap();
         assert_eq!(request.messages[1].content, "请解释快速排序算法");
-        assert!(request.messages[0].content.contains("直接使用你已有的世界知识准确回答"));
+        assert!(
+            request.messages[0]
+                .content
+                .contains("直接使用你已有的世界知识准确回答")
+        );
         assert!(request.messages[0].content.contains("不要仅因问题专业"));
     }
 }
