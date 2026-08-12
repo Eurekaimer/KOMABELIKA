@@ -45,7 +45,7 @@ impl ChatApp {
             factory::PROVIDER_IDS.contains(&provider_id),
             "未知 Provider“{provider_id}”"
         );
-        anyhow::ensure!(self.stream.is_none(), "请等待当前回复完成后再登录");
+        anyhow::ensure!(!self.is_generating(), "请等待当前回复完成后再登录");
         self.input.clear();
         self.completion_index = 0;
         self.input_mode = InputMode::Credential {

@@ -1,4 +1,8 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use anyhow::Result;
 
@@ -6,6 +10,7 @@ use crate::provider::{
     ChatMessage, ChatProvider, ChatRequest, ChatStream, ModelInfo, ProviderCapabilities, Role,
 };
 
+pub type ReplyFuture = Pin<Box<dyn Future<Output = Result<ChatStream>> + Send>>;
 pub struct ChatAgent {
     provider: Arc<dyn ChatProvider>,
     model: String,
@@ -39,23 +44,27 @@ impl ChatAgent {
         self.provider.list_models().await
     }
 
-    pub async fn reply(
+    pub fn start_reply(
         &self,
-        history: &[ChatMessage],
+        history: Vec<ChatMessage>,
         cancelled: Arc<AtomicBool>,
-    ) -> Result<ChatStream> {
-        let mut messages = Vec::with_capacity(history.len() + 1);
-        messages.push(ChatMessage {
-            role: Role::System,
-            content: crate::persona::default_context().to_owned(),
-        });
-        messages.extend_from_slice(history);
-        self.provider
-            .stream_chat(ChatRequest {
-                model: self.model.clone(),
-                messages,
-                cancelled,
-            })
-            .await
+    ) -> ReplyFuture {
+        let provider = Arc::clone(&self.provider);
+        let model = self.model.clone();
+        Box::pin(async move {
+            let mut messages = Vec::with_capacity(history.len() + 1);
+            messages.push(ChatMessage {
+                role: Role::System,
+                content: crate::persona::default_context().to_owned(),
+            });
+            messages.extend(history);
+            provider
+                .stream_chat(ChatRequest {
+                    model,
+                    messages,
+                    cancelled,
+                })
+                .await
+        })
     }
 }

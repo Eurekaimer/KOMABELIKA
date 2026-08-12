@@ -258,6 +258,50 @@ async fn t_focuses_history_and_j_k_scroll_without_stealing_text_input() {
 }
 
 #[tokio::test]
+async fn enter_makes_user_message_visible_before_request_connects() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
+    app.input = "立即显示".into();
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter))
+        .await
+        .unwrap();
+
+    assert!(app.input.is_empty());
+    assert_eq!(app.messages.last().unwrap().content, "立即显示");
+    assert!(app.stream_start.is_some());
+    assert!(app.stream.is_none());
+}
+
+#[tokio::test]
+async fn failed_request_start_keeps_visible_user_message_and_marks_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let mut config = AppConfig::default();
+    config.chat.provider = "test".into();
+    config.chat.model = "test-model".into();
+    let store = Store::open(directory.path().join("chat.sqlite3")).unwrap();
+    let agent = ChatAgent::new(Arc::new(TestProvider), "test-model");
+    let mut app = ChatApp::new(Some(agent), store, config, config_path, None).unwrap();
+    app.input = "连接失败也保留".into();
+    app.send().unwrap();
+
+    app.handle_stream_started(Err(anyhow::anyhow!("connection failed")))
+        .unwrap();
+
+    assert!(app.stream_start.is_none());
+    assert!(app.stream.is_none());
+    assert_eq!(app.messages.last().unwrap().content, "连接失败也保留");
+    assert_eq!(app.error.as_deref(), Some("connection failed"));
+}
+
+#[tokio::test]
 async fn clear_starts_with_no_prior_conversation_history() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
@@ -280,7 +324,7 @@ async fn clear_starts_with_no_prior_conversation_history() {
     assert_eq!(app.store.history(&previous_session).unwrap().len(), 1);
 
     app.input = "只属于新对话".into();
-    app.send().await.unwrap();
+    app.send().unwrap();
     let current_history = app.store.history(&app.session.id).unwrap();
     assert_eq!(current_history.len(), 1);
     assert_eq!(current_history[0].content, "只属于新对话");

@@ -16,27 +16,27 @@ impl ChatApp {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('c') => {
-                    if self.stream.is_some() {
+                    if self.is_generating() {
                         self.cancel_generation()?;
                     }
                     Ok(false)
                 }
                 KeyCode::Char('n') => {
-                    if self.stream.is_some() {
+                    if self.is_generating() {
                         self.cancel_generation()?;
                     }
                     self.open_session(self.store.create_session()?)?;
                     Ok(true)
                 }
                 KeyCode::Char('l') => {
-                    if self.stream.is_some() {
+                    if self.is_generating() {
                         self.cancel_generation()?;
                     }
                     self.switch_session()?;
                     Ok(true)
                 }
                 KeyCode::Char('p') => {
-                    if self.stream.is_none() {
+                    if !self.is_generating() {
                         self.show_model_picker().await;
                     }
                     Ok(true)
@@ -46,7 +46,7 @@ impl ChatApp {
                     Ok(true)
                 }
                 KeyCode::Char('o') => {
-                    if self.stream.is_none() {
+                    if !self.is_generating() {
                         self.handle_slash_command("/help").await;
                     }
                     Ok(true)
@@ -59,7 +59,7 @@ impl ChatApp {
             };
         }
 
-        if key.code == KeyCode::Esc && self.stream.is_some() {
+        if key.code == KeyCode::Esc && self.is_generating() {
             self.cancel_generation()?;
             return Ok(true);
         }
@@ -92,7 +92,7 @@ impl ChatApp {
             return Ok(true);
         }
 
-        if self.stream.is_none() && self.handle_completion_key(key.code) {
+        if !self.is_generating() && self.handle_completion_key(key.code) {
             return Ok(true);
         }
 
@@ -115,7 +115,7 @@ impl ChatApp {
     }
 
     async fn submit_input(&mut self) -> Result<()> {
-        if self.stream.is_some() {
+        if self.is_generating() {
             if !self.input.trim().is_empty() {
                 self.pending_send = true;
                 self.error = Some("消息已排队，将在当前回复完成后发送".into());
@@ -139,7 +139,7 @@ impl ChatApp {
                 return Ok(());
             }
         }
-        if let Err(error) = self.send().await {
+        if let Err(error) = self.send() {
             self.error = Some(error.to_string());
         }
         Ok(())

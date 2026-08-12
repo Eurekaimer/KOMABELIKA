@@ -1,3 +1,3 @@
 pub mod chat;
 
-pub use chat::ChatAgent;
+pub use chat::{ChatAgent, ReplyFuture};

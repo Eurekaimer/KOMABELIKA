@@ -16,7 +16,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::time::{Duration, MissedTickBehavior};
 
 use crate::{
-    agent::ChatAgent,
+    agent::{ChatAgent, ReplyFuture},
     config::AppConfig,
     memory::{SessionSummary, Store, StoredMessage},
     provider::{ChatStream, Role, StreamEvent, TokenUsage},
@@ -106,6 +106,7 @@ struct ChatApp {
     model_picker: Option<ModelPicker>,
     focus: ChatFocus,
     history_scroll: u16,
+    stream_start: Option<ReplyFuture>,
     stream: Option<ChatStream>,
     cancellation: Option<Arc<AtomicBool>>,
     pending_send: bool,
@@ -141,6 +142,7 @@ impl ChatApp {
             model_picker: None,
             focus: ChatFocus::Input,
             history_scroll: 0,
+            stream_start: None,
             stream: None,
             cancellation: None,
             pending_send: false,
@@ -172,6 +174,10 @@ impl ChatApp {
         })
     }
 
+    fn is_generating(&self) -> bool {
+        self.stream_start.is_some() || self.stream.is_some()
+    }
+
     async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let mut events = EventStream::new();
         let mut redraw = tokio::time::interval(Duration::from_millis(33));
@@ -181,7 +187,13 @@ impl ChatApp {
         self.draw(terminal)?;
 
         loop {
-            let next = if self.stream.is_some() {
+            let next = if self.stream_start.is_some() {
+                tokio::select! {
+                    terminal_event = events.next() => LoopEvent::Terminal(terminal_event),
+                    result = next_stream_start(&mut self.stream_start) => LoopEvent::StreamStarted(result),
+                    _ = redraw.tick() => LoopEvent::Redraw,
+                }
+            } else if self.stream.is_some() {
                 tokio::select! {
                     terminal_event = events.next() => LoopEvent::Terminal(terminal_event),
                     stream_event = next_stream_event(&mut self.stream) => LoopEvent::Stream(stream_event),
@@ -203,12 +215,16 @@ impl ChatApp {
                 LoopEvent::Terminal(Some(Ok(_))) => self.draw(terminal)?,
                 LoopEvent::Terminal(Some(Err(error))) => return Err(error.into()),
                 LoopEvent::Terminal(None) => break,
+                LoopEvent::StreamStarted(result) => {
+                    self.handle_stream_started(result)?;
+                    self.draw(terminal)?;
+                }
                 LoopEvent::Stream(Some(event)) => {
                     self.handle_stream_event(event)?;
-                    if self.stream.is_none() {
+                    if !self.is_generating() {
                         if self.pending_send && self.error.is_none() {
                             self.pending_send = false;
-                            self.send().await?;
+                            self.send()?;
                         }
                         self.draw(terminal)?;
                     }
@@ -222,7 +238,7 @@ impl ChatApp {
                 LoopEvent::Redraw => self.draw(terminal)?,
             }
         }
-        if self.stream.is_some() {
+        if self.is_generating() {
             self.cancel_generation()?;
         }
         Ok(())
@@ -255,7 +271,7 @@ impl ChatApp {
                     session_name: &self.session.title,
                     provider: self.provider_id(),
                     model: self.model(),
-                    generating: self.stream.is_some(),
+                    generating: self.is_generating(),
                     input_tokens: self.usage.input_tokens,
                     output_tokens: self.usage.output_tokens,
                     error: self.error.as_deref(),
@@ -286,23 +302,16 @@ impl ChatApp {
         Ok(())
     }
 
-    async fn send(&mut self) -> Result<()> {
-        if self.stream.is_some() || self.input.trim().is_empty() {
+    fn send(&mut self) -> Result<()> {
+        if self.is_generating() || self.input.trim().is_empty() {
             return Ok(());
         }
         self.pending_send = false;
         self.error = None;
         self.focus = ChatFocus::Input;
         self.history_scroll = 0;
-        let is_command = self.input.trim_start().starts_with('/');
-        if !is_command {
-            self.active_agent()?;
-        }
+        self.active_agent()?;
         let input = std::mem::take(&mut self.input);
-        if is_command {
-            self.handle_slash_command(input.trim()).await;
-            return Ok(());
-        }
         self.store
             .save_message(&self.session.id, Role::User, &input, false)?;
         self.session.title = self
@@ -315,14 +324,26 @@ impl ChatApp {
         });
         let history = self.store.history(&self.session.id)?;
         let cancellation = Arc::new(AtomicBool::new(false));
-        let stream = self
-            .active_agent()?
-            .reply(&history, cancellation.clone())
-            .await?;
-        self.stream = Some(stream);
-        self.cancellation = Some(cancellation);
         self.streaming_text.clear();
         self.reasoning_text.clear();
+        self.stream_start = Some(
+            self.active_agent()?
+                .start_reply(history, cancellation.clone()),
+        );
+        self.cancellation = Some(cancellation);
+        Ok(())
+    }
+
+    fn handle_stream_started(&mut self, result: Result<ChatStream>) -> Result<()> {
+        self.stream_start = None;
+        match result {
+            Ok(stream) => self.stream = Some(stream),
+            Err(error) => {
+                self.error = Some(error.to_string());
+                self.pending_send = false;
+                self.finish_generation(true)?;
+            }
+        }
         Ok(())
     }
 
@@ -365,6 +386,7 @@ impl ChatApp {
 
     fn finish_generation(&mut self, interrupted: bool) -> Result<()> {
         self.stream = None;
+        self.stream_start = None;
         self.cancellation = None;
         self.reasoning_text.clear();
         if !self.streaming_text.is_empty() {
@@ -410,8 +432,16 @@ impl ChatApp {
 
 enum LoopEvent {
     Terminal(Option<Result<Event, io::Error>>),
+    StreamStarted(Result<ChatStream>),
     Stream(Option<StreamEvent>),
     Redraw,
+}
+
+async fn next_stream_start(start: &mut Option<ReplyFuture>) -> Result<ChatStream> {
+    start
+        .as_mut()
+        .expect("stream start future is present while selected")
+        .await
 }
 
 async fn next_stream_event(stream: &mut Option<ChatStream>) -> Option<StreamEvent> {
