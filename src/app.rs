@@ -39,10 +39,6 @@ pub async fn run(
     config_path: PathBuf,
     process_api_key: Option<String>,
 ) -> Result<()> {
-    if let Some(agent) = &agent {
-        validate_agent(agent).await?;
-    }
-
     enable_raw_mode()?;
     let mut output = stdout();
     execute!(output, EnterAlternateScreen)?;

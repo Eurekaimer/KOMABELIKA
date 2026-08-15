@@ -17,10 +17,12 @@ pub const PROVIDER_IDS: [&str; 2] = ["deepseek", "opencode-go"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum MissingCredential {
-    #[error("no DeepSeek API key found; run `komari-call login deepseek` or set DEEPSEEK_API_KEY")]
+    #[error(
+        "no DeepSeek API key found; start `komari-call` and enter `/login deepseek` in the TUI"
+    )]
     DeepSeek,
     #[error(
-        "no OpenCode Go API key found; run komari-call login opencode-go or set OPENCODE_API_KEY"
+        "no OpenCode Go API key found; start `komari-call` and enter `/login opencode-go` in the TUI"
     )]
     OpenCodeGo,
 }

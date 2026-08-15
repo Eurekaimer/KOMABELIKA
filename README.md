@@ -58,7 +58,7 @@ komari-call models --provider opencode-go
 komari-call
 ```
 
-如果不想先退出到 Shell，缺少凭据时也可以直接运行 `komari-call`。进入 TUI 后输入 `/login`，或输入 `/login opencode-go`，API Key 会在当前输入框中以圆点隐藏显示；按 `Enter` 验证并保存，按 `Esc` 取消。
+直接运行 `komari-call` 总会先进入 TUI；缺少凭据或已有凭据验证失败时，不会在界面启动前退出。进入 TUI 后输入 `/login`，或输入 `/login opencode-go`，API Key 会在当前输入框中以圆点隐藏显示；按 `Enter` 验证并保存，按 `Esc` 取消。
 
 也可以使用环境变量，或用 `chat --api-key` / `models --api-key` 只为当前进程提供所选 Provider 的 Key：
 
